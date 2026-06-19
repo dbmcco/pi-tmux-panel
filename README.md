@@ -2,7 +2,7 @@
 
 A [pi](https://pi.dev) extension for tmux-heavy agent coordination.
 
-It adds a `/tmux` command that opens a preview-first tmux pane switcher inside pi, plus mobile-friendly subcommands for listing, previewing, jumping, sending, linking, tagging, and spawning visible pi/shell panes.
+It adds a `/tmux` command that opens a preview-first tmux pane switcher inside pi, plus mobile-friendly subcommands for listing, quick jumping, previewing, sending, linking, tagging, spawning visible pi/shell panes, and opening a global `/mgr` tmux manager agent.
 
 ## Install
 
@@ -43,6 +43,7 @@ Mobile-friendly command flow:
 
 ```text
 /tmux list
+/tmux <number|pane-id|target>
 /tmux preview <number|pane-id|target>
 /tmux jump <number|pane-id|target>
 /tmux send <number|pane-id|target> <message>
@@ -52,11 +53,14 @@ Mobile-friendly command flow:
 /tmux spawn pi <task>
 /tmux spawn shell [name]
 /tmux delegate <task>
+/mgr
 ```
 
 Examples:
 
 ```text
+/tmux list
+/tmux 3
 /tmux preview 3
 /tmux jump %129
 /tmux send infra:2.1 please summarize status
@@ -64,12 +68,15 @@ Examples:
 /tmux wg 3 WG-123
 /tmux spawn pi review the auth changes
 /tmux delegate scout the tmux extension code
+/mgr
 ```
 
 ## Behavior
 
 - Opens a right-side overlay on wide terminals.
 - Opens a full-width centered overlay on narrow/mobile terminals.
+- Uses clean mobile labels on narrow terminals and `/tmux list`, hiding titles, tasks, Workgraph IDs, roles, and other cockpit detail.
+- `/tmux <selector>` quick-jumps for fast mobile pane switching.
 - Lists tmux panes grouped by current pane, related cwd, other agents, and shells.
 - Uses tmux metadata for identity before preview: session/window/pane, `%pane_id`, command, cwd, title.
 - `Enter` previews recent pane output.
@@ -89,6 +96,7 @@ Examples:
 - Can associate panes with the current pane via `/tmux link`.
 - Can display Workgraph task IDs via `/tmux wg`; this is display-only and does not mutate Workgraph.
 - Can explicitly spawn visible pi/shell panes via `/tmux spawn`.
+- `/mgr` opens or creates one global visible tmux manager agent in the `pi-manager` tmux session.
 - No global keyboard shortcuts are registered.
 
 ## State
@@ -99,7 +107,7 @@ Pane metadata is stored at:
 ~/.pi/agent/tmux-panel-state.json
 ```
 
-The state file records optional parent pane, role, task, Workgraph task tags, and activity decay metadata keyed by stable `%pane_id`.
+The state file records optional parent pane, role, task, Workgraph task tags, activity decay metadata keyed by stable `%pane_id`, and the global manager pane id/target.
 
 ## Keys
 
@@ -131,6 +139,14 @@ Preview actions:
 - `Send` — prompt for a message, then send it plus Enter to the pane.
 - `Back` — return to list.
 - `Close` — close overlay.
+
+## Manager
+
+```text
+/mgr
+```
+
+`/mgr` opens or creates a single global manager agent for all tmux sessions. It lives in a visible tmux session/window named `pi-manager:manager`, uses a dedicated manager system prompt, and can inspect/control all panes through normal tmux/pi tools. Destructive actions remain confirmation-gated by prompt policy.
 
 ## Verification
 

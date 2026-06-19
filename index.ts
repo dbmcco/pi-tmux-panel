@@ -42,7 +42,13 @@ type ActivityMetadata = {
 	lastStatus?: string;
 };
 
-type PanelState = { panes: Record<string, PaneMetadata>; activity: Record<string, ActivityMetadata> };
+type ManagerMetadata = {
+	paneId?: string;
+	target?: string;
+	createdAt?: number;
+};
+
+type PanelState = { panes: Record<string, PaneMetadata>; activity: Record<string, ActivityMetadata>; manager?: ManagerMetadata };
 
 type PaneGroup = { title: string; panes: Pane[] };
 
@@ -62,12 +68,17 @@ const {
 	buildSendKeysArgs,
 	formatPaneLabel,
 	formatPaneCompactLabel,
+	formatPaneCleanMobileLabel,
 	flattenGroups,
 	resolvePaneSelector,
 	parseTmuxCommandArgs,
 	getOverlayOptions,
 	enrichPaneMetadata,
 	buildSpawnWindowArgs,
+	buildManagerSessionArgs,
+	buildManagerWindowArgs,
+	resolveManagerPane,
+	MANAGER_SESSION_NAME,
 	computeScrollOffset,
 	computeManualScrollOffset,
 	formatCaptureError,
@@ -81,6 +92,7 @@ const {
 	buildSendKeysArgs: (pane: Pane, message: string) => string[];
 	formatPaneLabel: (pane: Pane) => string;
 	formatPaneCompactLabel: (number: number, pane: Pane) => string;
+	formatPaneCleanMobileLabel: (number: number, pane: Pane) => string;
 	flattenGroups: (groups: PaneGroup[]) => Array<{ number: number; groupTitle: string; pane: Pane }>;
 	resolvePaneSelector: (
 		flatItems: Array<{ number: number; groupTitle: string; pane: Pane }>,
@@ -98,6 +110,10 @@ const {
 	getOverlayOptions: (columns?: number) => Record<string, unknown>;
 	enrichPaneMetadata: (pane: Pane, state: PanelState, currentPaneId?: string, capturedText?: string) => Pane;
 	buildSpawnWindowArgs: (cwd: string, kind: string, task?: string) => string[];
+	buildManagerSessionArgs: (cwd: string) => string[];
+	buildManagerWindowArgs: (cwd: string) => string[];
+	resolveManagerPane: (panes: Pane[], state: PanelState) => Pane | undefined;
+	MANAGER_SESSION_NAME: string;
 	computeScrollOffset: (selectedRowIndex: number, currentOffset: number, viewportSize: number) => number;
 	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
 	formatCaptureError: (pane: Pane, errorMessage: unknown) => string;
@@ -189,6 +205,7 @@ function loadPanelState(): PanelState {
 		return {
 			panes: parsed?.panes && typeof parsed.panes === "object" ? parsed.panes : {},
 			activity: parsed?.activity && typeof parsed.activity === "object" ? parsed.activity : {},
+			manager: parsed?.manager && typeof parsed.manager === "object" ? parsed.manager : undefined,
 		};
 	} catch {
 		return { panes: {}, activity: {} };
@@ -228,8 +245,10 @@ async function loadPanes(pi: ExtensionAPI, ctx: ExtensionCommandContext, state: 
 			const capturedText = await capturePaneForActivity(pi, pane);
 			const activity = computePaneActivity(pane, capturedText, state.activity[pane.paneId], now);
 			state.activity[pane.paneId] = activity.activity;
+			const enriched = enrichPaneMetadata(pane, state, process.env.TMUX_PANE, capturedText);
 			return {
-				...enrichPaneMetadata(pane, state, process.env.TMUX_PANE, capturedText),
+				...enriched,
+				role: pane.paneId === state.manager?.paneId ? "manager" : enriched.role,
 				status: activity.status,
 				statusGlyph: activity.statusGlyph,
 			};
@@ -262,6 +281,27 @@ async function jumpToPane(pi: ExtensionAPI, pane: Pane): Promise<void> {
 
 async function sendToPane(pi: ExtensionAPI, pane: Pane, message: string): Promise<void> {
 	await runTmux(pi, buildSendKeysArgs(pane, message));
+}
+
+async function tmuxSessionExists(pi: ExtensionAPI, sessionName: string): Promise<boolean> {
+	const result = await pi.exec("tmux", ["has-session", "-t", sessionName], { timeout: 5000 });
+	return result.code === 0;
+}
+
+async function createManagerPane(pi: ExtensionAPI, cwd: string, state: PanelState): Promise<Pane> {
+	const hasManagerSession = await tmuxSessionExists(pi, MANAGER_SESSION_NAME);
+	const output = await runTmux(pi, hasManagerSession ? buildManagerWindowArgs(cwd) : buildManagerSessionArgs(cwd));
+	const spawned = parsePaneRows(output, process.env.TMUX_PANE)[0];
+	if (!spawned?.paneId) throw new Error("tmux did not return a manager pane id");
+	state.manager = { paneId: spawned.paneId, target: spawned.target, createdAt: Date.now() };
+	state.panes[spawned.paneId] = {
+		...(state.panes[spawned.paneId] ?? {}),
+		role: "manager",
+		task: "central tmux manager",
+		createdAt: state.panes[spawned.paneId]?.createdAt ?? Date.now(),
+	};
+	savePanelState(state);
+	return { ...spawned, role: "manager", repo: "tmux-manager" };
 }
 
 function visibleRows(groups: PaneGroup[], query: string): Array<{ kind: "group"; title: string } | { kind: "pane"; pane: Pane }> {
@@ -395,7 +435,7 @@ function createPanel(options: {
 			const selected = paneOrdinal === selectedPaneIndex;
 			const number = paneOrdinal + 1;
 			const prefix = selected ? theme.fg("accent", "> ") : "  ";
-			const label = width < 90 ? formatPaneCompactLabel(number, row.pane) : `${String(number).padStart(2)}  ${formatPaneLabel(row.pane)}`;
+			const label = width < 90 ? formatPaneCleanMobileLabel(number, row.pane) : `${String(number).padStart(2)}  ${formatPaneLabel(row.pane)}`;
 			lines.push(prefix + colorPaneLabel(row.pane, label, selected));
 		}
 		const remaining = rows.length - (scrollOffset + maxBodyLines);
@@ -532,7 +572,7 @@ function formatNumberedPaneList(groups: PaneGroup[]): string {
 		lines.push(`── ${group.title} ──`);
 		for (const item of flattenGroups([{ title: group.title, panes: group.panes }])) {
 			const globalNumber = flattenGroups(groups).find((candidate) => candidate.pane.paneId === item.pane.paneId)?.number ?? item.number;
-			lines.push(formatPaneCompactLabel(globalNumber, item.pane));
+			lines.push(formatPaneCleanMobileLabel(globalNumber, item.pane));
 		}
 		lines.push("");
 	}
@@ -566,6 +606,38 @@ async function showPanel(ctx: ExtensionCommandContext, groups: PaneGroup[], stat
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.registerCommand("mgr", {
+		description: "Open or create the central tmux manager agent",
+		handler: async (_args, ctx) => {
+			if (!process.env.TMUX) {
+				ctx.ui.notify("/mgr is only available inside tmux.", "warning");
+				return;
+			}
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("/mgr requires interactive TUI mode.", "warning");
+				return;
+			}
+
+			const state = loadPanelState();
+			let panes = await loadPanes(pi, ctx, state);
+			let managerPane = resolveManagerPane(panes, state);
+			if (!managerPane) {
+				managerPane = await createManagerPane(pi, ctx.cwd, state);
+				ctx.ui.notify(`Created central manager in ${managerPane.target}`, "info");
+			} else if (managerPane.paneId !== state.manager?.paneId) {
+				state.manager = { paneId: managerPane.paneId, target: managerPane.target, createdAt: state.manager?.createdAt ?? Date.now() };
+				state.panes[managerPane.paneId] = {
+					...(state.panes[managerPane.paneId] ?? {}),
+					role: "manager",
+					task: "central tmux manager",
+					createdAt: state.panes[managerPane.paneId]?.createdAt ?? Date.now(),
+				};
+				savePanelState(state);
+			}
+			await jumpToPane(pi, managerPane);
+		},
+	});
+
 	pi.registerCommand("tmux", {
 		description: "Open a preview-first tmux pane switcher overlay",
 		handler: async (args, ctx) => {

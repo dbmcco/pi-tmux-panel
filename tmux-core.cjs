@@ -111,6 +111,25 @@ function formatPaneCompactLabel(number, pane) {
   return `${number}. ${pane.target} ${paneMetaParts(pane)} — ${title}${suffix}`;
 }
 
+function cleanMobileRole(pane) {
+  if (pane.isCurrent) return 'current';
+  if (pane.role === 'manager' || pane.sessionName === 'pi-manager' || /tmux manager/i.test(pane.title || '')) return 'mgr';
+  if (pane.relation) return pane.relation;
+  if (pane.kind === 'shell') return 'shell';
+  return 'agent';
+}
+
+function formatPaneCleanMobileLabel(number, pane) {
+  const parts = [
+    `${number}.`,
+    pane.statusGlyph,
+    cleanMobileRole(pane),
+    pane.kind,
+    pane.repo,
+  ];
+  return parts.filter(Boolean).join(' ');
+}
+
 function flattenGroups(groups) {
   const items = [];
   for (const group of groups) {
@@ -135,6 +154,7 @@ function parseTmuxCommandArgs(args) {
   const [action, selector, ...rest] = trimmed.split(/\s+/);
   if (action === 'list') return { action: 'list' };
   if (action === 'preview' || action === 'jump') return { action, selector };
+  if (/^(\d+|%\d+|[^\s:]+:\d+(?:\.\d+)?)$/.test(trimmed)) return { action: 'jump', selector: trimmed };
   if (action === 'send') return { action, selector, message: rest.join(' ') };
   if (action === 'link') return { action: 'link', selector, role: rest.join(' ') || undefined };
   if (action === 'unlink') return { action: 'unlink', selector };
@@ -281,6 +301,69 @@ function buildSpawnWindowArgs(cwd, kind, task) {
   ];
 }
 
+const MANAGER_SESSION_NAME = 'pi-manager';
+const MANAGER_WINDOW_NAME = 'manager';
+
+function buildManagerPrompt() {
+  return [
+    'You are the central tmux manager for Braydon\'s agent workspace.',
+    '',
+    'Your job is to monitor all tmux sessions, windows, and panes; identify coding agents, shells, idle panes, panes needing input, failed panes, and stale panes; and give concise mobile-friendly feedback.',
+    '',
+    'You may help the user switch panes, send messages to panes, spawn helper agents, and recommend cleanup. Require explicit confirmation before destructive actions including kill, interrupt, deletion, cleanup, or sending large prompts.',
+    '',
+    'Treat tmux as the source of process and workspace truth. Prefer preview-before-control. Use tmux-monitor status --all and tmux CLI inspection when you need current pane state. Keep responses short unless asked for detail.',
+  ].join('\n');
+}
+
+function buildManagerCommand() {
+  return `pi --name 'tmux manager' --system-prompt ${shellQuote(buildManagerPrompt())} ${shellQuote('Open the central tmux manager. Start with a concise status summary and ask how you can help.')}`;
+}
+
+function buildManagerSessionArgs(cwd) {
+  return [
+    'new-session',
+    '-d',
+    '-s',
+    MANAGER_SESSION_NAME,
+    '-n',
+    MANAGER_WINDOW_NAME,
+    '-P',
+    '-F',
+    LIST_PANES_FORMAT,
+    '-c',
+    cwd,
+    buildManagerCommand(),
+  ];
+}
+
+function buildManagerWindowArgs(cwd) {
+  return [
+    'new-window',
+    '-t',
+    `${MANAGER_SESSION_NAME}:`,
+    '-P',
+    '-F',
+    LIST_PANES_FORMAT,
+    '-n',
+    MANAGER_WINDOW_NAME,
+    '-c',
+    cwd,
+    buildManagerCommand(),
+  ];
+}
+
+function resolveManagerPane(panes, state) {
+  const managerPaneId = state?.manager?.paneId;
+  if (managerPaneId) {
+    const byState = panes.find((pane) => pane.paneId === managerPaneId);
+    if (byState) return byState;
+  }
+  return panes.find(
+    (pane) => pane.role === 'manager' || pane.sessionName === MANAGER_SESSION_NAME || /tmux manager/i.test(pane.title || ''),
+  );
+}
+
 function getOverlayOptions(columns) {
   const width = Number(columns || 0);
   if (width > 0 && width < 100) {
@@ -331,6 +414,7 @@ module.exports = {
   buildSendKeysArgs,
   formatPaneLabel,
   formatPaneCompactLabel,
+  formatPaneCleanMobileLabel,
   flattenGroups,
   resolvePaneSelector,
   parseTmuxCommandArgs,
@@ -343,6 +427,12 @@ module.exports = {
   shellQuote,
   buildSpawnCommand,
   buildSpawnWindowArgs,
+  buildManagerPrompt,
+  buildManagerCommand,
+  buildManagerSessionArgs,
+  buildManagerWindowArgs,
+  resolveManagerPane,
+  MANAGER_SESSION_NAME,
   LIST_PANES_FORMAT,
   computeScrollOffset,
   computeManualScrollOffset,

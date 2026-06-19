@@ -9,6 +9,7 @@ const {
   buildSendKeysArgs,
   formatPaneLabel,
   formatPaneCompactLabel,
+  formatPaneCleanMobileLabel,
   flattenGroups,
   resolvePaneSelector,
   parseTmuxCommandArgs,
@@ -17,6 +18,11 @@ const {
   enrichPaneMetadata,
   buildSpawnCommand,
   buildSpawnWindowArgs,
+  buildManagerPrompt,
+  buildManagerCommand,
+  buildManagerSessionArgs,
+  buildManagerWindowArgs,
+  resolveManagerPane,
   shellQuote,
   computeScrollOffset,
   computeManualScrollOffset,
@@ -121,11 +127,25 @@ test('formatPaneCompactLabel keeps mobile list readable', () => {
   assert.equal(formatPaneCompactLabel(2, panes[2]), '2. paia:7.1 codex paia-program — paia-program | 5h 84% left');
 });
 
+test('formatPaneCleanMobileLabel hides task/title metadata for mobile chat flow', () => {
+  const panes = parsePaneRows(sampleRows, '%128');
+  const current = { ...panes[0], statusGlyph: '●', status: 'active', role: 'driver', workgraphTaskId: 'WG-1' };
+  const child = { ...panes[2], statusGlyph: '◆', status: 'needs-input', relation: 'child', role: 'reviewer', workgraphTaskId: 'WG-123' };
+  const manager = { ...panes[3], statusGlyph: '◐', role: 'manager', repo: 'tmux-manager' };
+
+  assert.equal(formatPaneCleanMobileLabel(1, current), '1. ● current pi experiments');
+  assert.equal(formatPaneCleanMobileLabel(2, child), '2. ◆ child codex paia-program');
+  assert.equal(formatPaneCleanMobileLabel(3, manager), '3. ◐ mgr pi tmux-manager');
+});
+
 test('parseTmuxCommandArgs supports mobile subcommands', () => {
   assert.deepEqual(parseTmuxCommandArgs(''), { action: 'open' });
   assert.deepEqual(parseTmuxCommandArgs('list'), { action: 'list' });
   assert.deepEqual(parseTmuxCommandArgs('preview 3'), { action: 'preview', selector: '3' });
   assert.deepEqual(parseTmuxCommandArgs('jump %129'), { action: 'jump', selector: '%129' });
+  assert.deepEqual(parseTmuxCommandArgs('2'), { action: 'jump', selector: '2' });
+  assert.deepEqual(parseTmuxCommandArgs('%129'), { action: 'jump', selector: '%129' });
+  assert.deepEqual(parseTmuxCommandArgs('infra:2.1'), { action: 'jump', selector: 'infra:2.1' });
   assert.deepEqual(parseTmuxCommandArgs('send infra:2.1 hello there'), {
     action: 'send',
     selector: 'infra:2.1',
@@ -213,6 +233,55 @@ test('buildSpawnCommand and buildSpawnWindowArgs create explicit visible tmux ag
     '/repo/path',
     "pi --name 'review auth changes' 'review auth changes'",
   ]);
+});
+
+test('manager helpers build a global visible tmux manager agent', () => {
+  const prompt = buildManagerPrompt();
+  assert.match(prompt, /central tmux manager/i);
+  assert.match(prompt, /all tmux sessions/i);
+  assert.match(prompt, /confirmation before destructive/i);
+
+  const command = buildManagerCommand();
+  assert.match(command, /^pi --name 'tmux manager' --system-prompt '/);
+  assert.match(command, /central tmux manager/);
+
+  assert.deepEqual(buildManagerSessionArgs('/repo/path'), [
+    'new-session',
+    '-d',
+    '-s',
+    'pi-manager',
+    '-n',
+    'manager',
+    '-P',
+    '-F',
+    '#{session_name}:#{window_index}.#{pane_index}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}\t#{pane_pid}',
+    '-c',
+    '/repo/path',
+    command,
+  ]);
+  assert.deepEqual(buildManagerWindowArgs('/repo/path'), [
+    'new-window',
+    '-t',
+    'pi-manager:',
+    '-P',
+    '-F',
+    '#{session_name}:#{window_index}.#{pane_index}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}\t#{pane_pid}',
+    '-n',
+    'manager',
+    '-c',
+    '/repo/path',
+    command,
+  ]);
+});
+
+test('resolveManagerPane prefers state, then manager role/session/title', () => {
+  const panes = parsePaneRows(sampleRows, '%128');
+  const managerPane = { ...panes[3], sessionName: 'pi-manager', title: 'tmux manager', role: 'manager' };
+  const allPanes = [...panes, managerPane];
+
+  assert.equal(resolveManagerPane(allPanes, { manager: { paneId: managerPane.paneId } }).paneId, managerPane.paneId);
+  assert.equal(resolveManagerPane(allPanes, { manager: { paneId: '%missing' } }).paneId, managerPane.paneId);
+  assert.equal(resolveManagerPane(panes, { manager: { paneId: '%missing' } }), undefined);
 });
 
 test('computeScrollOffset keeps selected row visible in a clipped viewport', () => {
