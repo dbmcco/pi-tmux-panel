@@ -75,7 +75,16 @@ Examples:
 - `Enter` previews recent pane output.
 - Jumping is an explicit preview action, not the default list action.
 - Numbered selectors work in overlay lists and `/tmux` subcommands.
-- Shows lightweight status: `active`, `idle`, `needs-input`, `done`, or `unknown`.
+- Scans recent output from every pane on `/tmux` open and refresh.
+- Shows colored activity glyphs and long-decay status:
+  - `● active` — output changed within ~60s
+  - `◐ recent` — output changed within ~5m
+  - `◌ cooling` — output changed within ~20m
+  - `○ idle` — no output change for 20m+
+  - `◆ needs-input` — prompt/confirmation/password-looking output
+  - `✓ done` — completion-looking output
+  - `! error` — error/failure-looking output
+  - `? unknown` — first scan/no activity baseline yet
 - Improved agent type detection for pi, codex, claude, opencode, kilocode, and shells.
 - Can associate panes with the current pane via `/tmux link`.
 - Can display Workgraph task IDs via `/tmux wg`; this is display-only and does not mutate Workgraph.
@@ -90,7 +99,7 @@ Pane metadata is stored at:
 ~/.pi/agent/tmux-panel-state.json
 ```
 
-The state file records optional parent pane, role, task, and Workgraph task tags keyed by stable `%pane_id`.
+The state file records optional parent pane, role, task, Workgraph task tags, and activity decay metadata keyed by stable `%pane_id`.
 
 ## Keys
 

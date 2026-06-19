@@ -21,6 +21,8 @@ const {
   computeScrollOffset,
   computeManualScrollOffset,
   formatCaptureError,
+  computePaneActivity,
+  statusGlyph,
 } = require('../tmux-core.cjs');
 
 const sampleRows = [
@@ -236,4 +238,34 @@ test('formatCaptureError turns preview capture failures into displayable text', 
     formatCaptureError(pane, 'can\'t find pane: %125'),
     "Preview failed for paia:7.1 (%125)\ncan't find pane: %125",
   );
+});
+
+test('computePaneActivity uses long decay thresholds after output changes', () => {
+  const pane = parsePaneRows(sampleRows, '%128')[2];
+  const now = 1_000_000;
+  const first = computePaneActivity(pane, 'same output', undefined, now);
+
+  assert.equal(first.status, 'unknown');
+  assert.equal(first.statusGlyph, '?');
+  assert.equal(first.activity.lastChangedAt, now);
+
+  assert.equal(computePaneActivity(pane, 'same output', first.activity, now + 30_000).status, 'active');
+  assert.equal(computePaneActivity(pane, 'same output', first.activity, now + 2 * 60_000).status, 'recent');
+  assert.equal(computePaneActivity(pane, 'same output', first.activity, now + 10 * 60_000).status, 'cooling');
+  assert.equal(computePaneActivity(pane, 'same output', first.activity, now + 25 * 60_000).status, 'idle');
+
+  const changed = computePaneActivity(pane, 'changed output', first.activity, now + 25 * 60_000);
+  assert.equal(changed.status, 'active');
+  assert.equal(changed.activity.lastChangedAt, now + 25 * 60_000);
+});
+
+test('computePaneActivity overrides decay for needs-input, done, and error signals', () => {
+  const pane = parsePaneRows(sampleRows, '%128')[2];
+  const previous = computePaneActivity(pane, 'initial', undefined, 1_000).activity;
+
+  assert.equal(computePaneActivity(pane, 'Password:', previous, 2_000).status, 'needs-input');
+  assert.equal(computePaneActivity(pane, 'All tests completed successfully', previous, 2_000).status, 'done');
+  assert.equal(computePaneActivity(pane, 'Traceback: failed with exception', previous, 2_000).status, 'error');
+  assert.equal(statusGlyph('needs-input'), '◆');
+  assert.equal(statusGlyph('cooling'), '◌');
 });

@@ -91,13 +91,13 @@ function formatPaneLabel(pane) {
   const kind = (pane.kind || '?').padEnd(7);
   const repo = (pane.repo || '?').padEnd(18);
   const title = pane.title || pane.command || '';
-  const meta = [pane.status, pane.role, pane.workgraphTaskId].filter(Boolean).join(' ');
+  const meta = [pane.statusGlyph, pane.status, pane.role, pane.workgraphTaskId].filter(Boolean).join(' ');
   const suffix = pane.isCurrent ? '  ← you are here' : '';
   return `${target}${kind}${repo}${meta ? `${meta} ` : ''}${title}${suffix}`;
 }
 
 function paneMetaParts(pane) {
-  const parts = [pane.kind];
+  const parts = [pane.statusGlyph, pane.kind].filter(Boolean);
   if (pane.status) parts.push(pane.status);
   if (pane.role) parts.push(pane.role);
   if (pane.workgraphTaskId) parts.push(pane.workgraphTaskId);
@@ -144,13 +144,82 @@ function parseTmuxCommandArgs(args) {
   return { action: 'open', query: trimmed };
 }
 
-function inferPaneStatus(pane, capturedText) {
+const DEFAULT_ACTIVITY_THRESHOLDS = {
+  activeMs: 60_000,
+  recentMs: 5 * 60_000,
+  coolingMs: 20 * 60_000,
+};
+
+function statusGlyph(status) {
+  return {
+    active: '●',
+    recent: '◐',
+    cooling: '◌',
+    idle: '○',
+    'needs-input': '◆',
+    done: '✓',
+    error: '!',
+    unknown: '?',
+  }[status] || '?';
+}
+
+function hashText(text) {
+  let hash = 5381;
+  const value = String(text || '');
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function statusOverrideFromText(pane, capturedText) {
   const text = `${pane.title || ''}\n${capturedText || ''}`.toLowerCase();
-  if (/password:|\b(confirm|allow|deny|continue\?|proceed\?|select one|waiting for input)\b/.test(text)) return 'needs-input';
-  if (/\b(done|complete|completed|success|finished)\b/.test(text)) return 'done';
+  if (/password:|\b(confirm|allow|deny|continue\?|proceed\?|select one|waiting for input|press enter)\b/.test(text)) return 'needs-input';
+  if (/\b(traceback|exception|panic|failed|failure|fatal|error:|command not found)\b/.test(text)) return 'error';
+  if (/\b(done|complete|completed|success|succeeded|finished|ready)\b/.test(text)) return 'done';
+  return undefined;
+}
+
+function inferPaneStatus(pane, capturedText) {
+  const override = statusOverrideFromText(pane, capturedText);
+  if (override) return override;
   if (pane.kind === 'shell') return 'idle';
   if (['pi', 'codex', 'claude', 'opencode', 'kilocode'].includes(pane.kind)) return 'active';
   return 'unknown';
+}
+
+function computePaneActivity(pane, capturedText, previousActivity, now = Date.now(), thresholds = DEFAULT_ACTIVITY_THRESHOLDS) {
+  const contentHash = hashText(capturedText || '');
+  const isFirstSeen = !previousActivity || !previousActivity.lastHash;
+  const changed = !isFirstSeen && previousActivity.lastHash !== contentHash;
+  const lastChangedAt = changed ? now : previousActivity?.lastChangedAt ?? now;
+  const override = statusOverrideFromText(pane, capturedText);
+  let status;
+
+  if (override) {
+    status = override;
+  } else if (isFirstSeen) {
+    status = pane.kind === 'shell' ? 'idle' : 'unknown';
+  } else if (changed) {
+    status = 'active';
+  } else {
+    const age = Math.max(0, now - lastChangedAt);
+    if (age < thresholds.activeMs) status = 'active';
+    else if (age < thresholds.recentMs) status = 'recent';
+    else if (age < thresholds.coolingMs) status = 'cooling';
+    else status = 'idle';
+  }
+
+  return {
+    status,
+    statusGlyph: statusGlyph(status),
+    activity: {
+      lastHash: contentHash,
+      lastChangedAt,
+      lastSeenAt: now,
+      lastStatus: status,
+    },
+  };
 }
 
 function enrichPaneMetadata(pane, state, currentPaneId, capturedText) {
@@ -260,6 +329,9 @@ module.exports = {
   getOverlayOptions,
   inferPaneStatus,
   enrichPaneMetadata,
+  computePaneActivity,
+  statusGlyph,
+  hashText,
   shellQuote,
   buildSpawnCommand,
   buildSpawnWindowArgs,

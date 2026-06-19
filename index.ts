@@ -24,6 +24,7 @@ type Pane = {
 	role?: string;
 	workgraphTaskId?: string;
 	task?: string;
+	statusGlyph?: string;
 };
 
 type PaneMetadata = {
@@ -34,7 +35,14 @@ type PaneMetadata = {
 	createdAt?: number;
 };
 
-type PanelState = { panes: Record<string, PaneMetadata> };
+type ActivityMetadata = {
+	lastHash?: string;
+	lastChangedAt?: number;
+	lastSeenAt?: number;
+	lastStatus?: string;
+};
+
+type PanelState = { panes: Record<string, PaneMetadata>; activity: Record<string, ActivityMetadata> };
 
 type PaneGroup = { title: string; panes: Pane[] };
 
@@ -63,6 +71,7 @@ const {
 	computeScrollOffset,
 	computeManualScrollOffset,
 	formatCaptureError,
+	computePaneActivity,
 } = core as {
 	parsePaneRows: (output: string, currentPaneId?: string) => Pane[];
 	groupPanes: (panes: Pane[], currentCwd?: string) => PaneGroup[];
@@ -91,6 +100,12 @@ const {
 	computeScrollOffset: (selectedRowIndex: number, currentOffset: number, viewportSize: number) => number;
 	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
 	formatCaptureError: (pane: Pane, errorMessage: unknown) => string;
+	computePaneActivity: (
+		pane: Pane,
+		capturedText: string,
+		previousActivity?: ActivityMetadata,
+		now?: number,
+	) => { status: string; statusGlyph: string; activity: ActivityMetadata };
 };
 
 const LIST_PANES_FORMAT = [
@@ -110,9 +125,12 @@ const STATE_PATH = path.join(os.homedir(), ".pi", "agent", "tmux-panel-state.jso
 function loadPanelState(): PanelState {
 	try {
 		const parsed = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
-		return { panes: parsed?.panes && typeof parsed.panes === "object" ? parsed.panes : {} };
+		return {
+			panes: parsed?.panes && typeof parsed.panes === "object" ? parsed.panes : {},
+			activity: parsed?.activity && typeof parsed.activity === "object" ? parsed.activity : {},
+		};
 	} catch {
-		return { panes: {} };
+		return { panes: {}, activity: {} };
 	}
 }
 
@@ -129,18 +147,35 @@ async function runTmux(pi: ExtensionAPI, args: string[]): Promise<string> {
 	return result.stdout.trimEnd();
 }
 
+async function capturePaneForActivity(pi: ExtensionAPI, pane: Pane): Promise<string> {
+	try {
+		return await runTmux(pi, buildCaptureArgs(pane, 30));
+	} catch {
+		return "";
+	}
+}
+
 async function loadPanes(pi: ExtensionAPI, ctx: ExtensionCommandContext, state: PanelState): Promise<Pane[]> {
 	const output = await runTmux(pi, ["list-panes", "-a", "-F", LIST_PANES_FORMAT]);
-	return parsePaneRows(output, process.env.TMUX_PANE).map((pane) =>
-		enrichPaneMetadata(
-			{
-				...pane,
-				isCurrent: pane.paneId === process.env.TMUX_PANE,
-			},
-			state,
-			process.env.TMUX_PANE,
-		),
+	const rawPanes = parsePaneRows(output, process.env.TMUX_PANE).map((pane) => ({
+		...pane,
+		isCurrent: pane.paneId === process.env.TMUX_PANE,
+	}));
+	const now = Date.now();
+	const panes = await Promise.all(
+		rawPanes.map(async (pane) => {
+			const capturedText = await capturePaneForActivity(pi, pane);
+			const activity = computePaneActivity(pane, capturedText, state.activity[pane.paneId], now);
+			state.activity[pane.paneId] = activity.activity;
+			return {
+				...enrichPaneMetadata(pane, state, process.env.TMUX_PANE, capturedText),
+				status: activity.status,
+				statusGlyph: activity.statusGlyph,
+			};
+		}),
 	);
+	savePanelState(state);
+	return panes;
 }
 
 async function capturePane(pi: ExtensionAPI, pane: Pane): Promise<string> {
@@ -179,6 +214,7 @@ function visibleRows(groups: PaneGroup[], query: string): Array<{ kind: "group";
 						pane.target,
 						pane.paneId,
 						pane.kind,
+						pane.statusGlyph,
 						pane.status,
 						pane.role,
 						pane.workgraphTaskId,
@@ -249,6 +285,25 @@ function createPanel(options: {
 		return 0;
 	}
 
+	function colorPaneLabel(pane: Pane, label: string, selected: boolean): string {
+		if (selected) return theme.fg("accent", label);
+		switch (pane.status) {
+			case "active":
+			case "done":
+				return theme.fg("success", label);
+			case "needs-input":
+			case "recent":
+			case "cooling":
+				return theme.fg("warning", label);
+			case "error":
+				return theme.fg("error", label);
+			case "idle":
+				return theme.fg("dim", label);
+			default:
+				return label;
+		}
+	}
+
 	function renderList(width: number): string[] {
 		clampSelection();
 		const rows = visibleRows(groups, query);
@@ -280,7 +335,7 @@ function createPanel(options: {
 			const number = paneOrdinal + 1;
 			const prefix = selected ? theme.fg("accent", "> ") : "  ";
 			const label = width < 90 ? formatPaneCompactLabel(number, row.pane) : `${String(number).padStart(2)}  ${formatPaneLabel(row.pane)}`;
-			lines.push(prefix + (selected ? theme.fg("accent", label) : label));
+			lines.push(prefix + colorPaneLabel(row.pane, label, selected));
 		}
 		const remaining = rows.length - (scrollOffset + maxBodyLines);
 		if (remaining > 0) lines.push(theme.fg("dim", `↓ ${remaining} more row(s)`));
