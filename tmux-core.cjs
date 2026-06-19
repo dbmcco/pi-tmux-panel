@@ -418,6 +418,11 @@ function normalizeRenderLines(lines, targetLineCount) {
   return normalized;
 }
 
+function shouldIgnoreInitialPreviewEnter(openedAt, now = Date.now(), guardMs = 650) {
+  if (!openedAt) return false;
+  return Math.max(0, now - openedAt) < guardMs;
+}
+
 module.exports = {
   inferKind,
   repoLabel,
@@ -454,4 +459,5 @@ module.exports = {
   computeManualScrollOffset,
   formatCaptureError,
   normalizeRenderLines,
+  shouldIgnoreInitialPreviewEnter,
 };

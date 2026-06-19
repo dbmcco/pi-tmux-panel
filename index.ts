@@ -96,6 +96,7 @@ const {
 	computeManualScrollOffset,
 	formatCaptureError,
 	normalizeRenderLines,
+	shouldIgnoreInitialPreviewEnter,
 	computePaneActivity: coreComputePaneActivity,
 } = core as {
 	parsePaneRows: (output: string, currentPaneId?: string) => Pane[];
@@ -134,6 +135,7 @@ const {
 	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
 	formatCaptureError: (pane: Pane, errorMessage: unknown) => string;
 	normalizeRenderLines: (lines: string[], targetLineCount: number) => string[];
+	shouldIgnoreInitialPreviewEnter: (openedAt: number, now?: number, guardMs?: number) => boolean;
 	computePaneActivity?: (
 		pane: Pane,
 		capturedText: string,
@@ -474,15 +476,18 @@ function createPanel(options: {
 	previewPane?: Pane;
 	previewOutput?: string;
 	initialQuery?: string;
+	initialActionIndex?: number;
+	ignoreInitialEnterMs?: number;
 	onDone: (result: PanelResult) => void;
 	theme: any;
 	tui: { requestRender: () => void };
 }) {
-	const { groups, previewPane, previewOutput, initialQuery = "", onDone, theme, tui } = options;
+	const { groups, previewPane, previewOutput, initialQuery = "", initialActionIndex = 0, ignoreInitialEnterMs = 0, onDone, theme, tui } = options;
+	const openedAt = Date.now();
 	let selectedPaneIndex = 0;
 	let query = initialQuery;
 	let searching = false;
-	let actionIndex = 0;
+	let actionIndex = initialActionIndex;
 	let scrollOffset = 0;
 	let previewScrollOffset = 0;
 	const actions: Array<{ label: string; result: (pane: Pane) => PanelResult }> = [
@@ -644,6 +649,10 @@ function createPanel(options: {
 					actionIndex = (actionIndex + 1) % actions.length;
 					tui.requestRender();
 				} else if (matchesKey(data, Key.enter)) {
+					if (shouldIgnoreInitialPreviewEnter(openedAt, Date.now(), ignoreInitialEnterMs)) {
+						tui.requestRender();
+						return;
+					}
 					onDone(actions[actionIndex].result(previewPane));
 				}
 				return;
@@ -717,7 +726,11 @@ function formatNumberedPaneList(groups: PaneGroup[]): string {
 	return lines.join("\n").trimEnd();
 }
 
-async function showPanel(ctx: ExtensionCommandContext, groups: PaneGroup[], state: { previewPane?: Pane; previewOutput?: string; query?: string }) {
+async function showPanel(
+	ctx: ExtensionCommandContext,
+	groups: PaneGroup[],
+	state: { previewPane?: Pane; previewOutput?: string; query?: string; initialActionIndex?: number; ignoreInitialEnterMs?: number },
+) {
 	return ctx.ui.custom<PanelResult | undefined>(
 		(tui, theme, _keybindings, done) =>
 			createPanel({
@@ -725,6 +738,8 @@ async function showPanel(ctx: ExtensionCommandContext, groups: PaneGroup[], stat
 				previewPane: state.previewPane,
 				previewOutput: state.previewOutput,
 				initialQuery: state.query,
+				initialActionIndex: state.initialActionIndex,
+				ignoreInitialEnterMs: state.ignoreInitialEnterMs,
 				theme,
 				tui,
 				onDone: done,
@@ -772,7 +787,7 @@ export default function (pi: ExtensionAPI) {
 			let previewOutput: string | undefined = await capturePane(pi, managerPane);
 			while (true) {
 				const groups = groupPanes(panes, ctx.cwd);
-				const result = await showPanel(ctx, groups, { previewPane, previewOutput });
+				const result = await showPanel(ctx, groups, { previewPane, previewOutput, initialActionIndex: 1, ignoreInitialEnterMs: 900 });
 				if (!result || result.type === "close" || result.type === "back") return;
 				if (result.type === "refresh") {
 					panes = await loadPanes(pi, ctx, state);

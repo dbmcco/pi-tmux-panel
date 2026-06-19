@@ -32,6 +32,7 @@ const {
   computePaneActivity,
   statusGlyph,
   normalizeRenderLines,
+  shouldIgnoreInitialPreviewEnter,
 } = require('../tmux-core.cjs');
 
 const sampleRows = [
@@ -362,4 +363,11 @@ test('normalizeRenderLines pads short renders to clear stale overlay rows', () =
   assert.deepEqual(normalizeRenderLines(['one', 'two'], 4), ['one', 'two', '', '']);
   assert.deepEqual(normalizeRenderLines(['one', 'two', 'three'], 2), ['one', 'two']);
   assert.deepEqual(normalizeRenderLines(['one'], 0), ['one']);
+});
+
+test('shouldIgnoreInitialPreviewEnter guards mobile command submit from activating preview action', () => {
+  assert.equal(shouldIgnoreInitialPreviewEnter(1_000, 1_100, 650), true);
+  assert.equal(shouldIgnoreInitialPreviewEnter(1_000, 1_650, 650), false);
+  assert.equal(shouldIgnoreInitialPreviewEnter(1_000, 2_000, 650), false);
+  assert.equal(shouldIgnoreInitialPreviewEnter(0, 100, 650), false);
 });
