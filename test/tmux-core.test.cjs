@@ -23,6 +23,8 @@ const {
   buildManagerSessionArgs,
   buildManagerWindowArgs,
   resolveManagerPane,
+  updateJumpHistory,
+  resolveFlipPane,
   shellQuote,
   computeScrollOffset,
   computeManualScrollOffset,
@@ -127,20 +129,21 @@ test('formatPaneCompactLabel keeps mobile list readable', () => {
   assert.equal(formatPaneCompactLabel(2, panes[2]), '2. paia:7.1 codex paia-program — paia-program | 5h 84% left');
 });
 
-test('formatPaneCleanMobileLabel hides task/title metadata for mobile chat flow', () => {
+test('formatPaneCleanMobileLabel shows target and description for mobile switching', () => {
   const panes = parsePaneRows(sampleRows, '%128');
   const current = { ...panes[0], statusGlyph: '●', status: 'active', role: 'driver', workgraphTaskId: 'WG-1' };
   const child = { ...panes[2], statusGlyph: '◆', status: 'needs-input', relation: 'child', role: 'reviewer', workgraphTaskId: 'WG-123' };
-  const manager = { ...panes[3], statusGlyph: '◐', role: 'manager', repo: 'tmux-manager' };
+  const manager = { ...panes[3], target: 'pi-manager:0.0', statusGlyph: '◐', role: 'manager', repo: 'tmux-manager', title: 'tmux manager' };
 
-  assert.equal(formatPaneCleanMobileLabel(1, current), '1. ● current pi experiments');
-  assert.equal(formatPaneCleanMobileLabel(2, child), '2. ◆ child codex paia-program');
-  assert.equal(formatPaneCleanMobileLabel(3, manager), '3. ◐ mgr pi tmux-manager');
+  assert.equal(formatPaneCleanMobileLabel(1, current), '1. ● infra:1.1 — pi · experiments');
+  assert.equal(formatPaneCleanMobileLabel(2, child), '2. ◆ paia:7.1 — paia-program | 5h 84% left');
+  assert.equal(formatPaneCleanMobileLabel(3, manager), '3. ◐ pi-manager:0.0 — tmux manager');
 });
 
 test('parseTmuxCommandArgs supports mobile subcommands', () => {
   assert.deepEqual(parseTmuxCommandArgs(''), { action: 'open' });
   assert.deepEqual(parseTmuxCommandArgs('list'), { action: 'list' });
+  assert.deepEqual(parseTmuxCommandArgs('flip'), { action: 'flip' });
   assert.deepEqual(parseTmuxCommandArgs('preview 3'), { action: 'preview', selector: '3' });
   assert.deepEqual(parseTmuxCommandArgs('jump %129'), { action: 'jump', selector: '%129' });
   assert.deepEqual(parseTmuxCommandArgs('2'), { action: 'jump', selector: '2' });
@@ -282,6 +285,21 @@ test('resolveManagerPane prefers state, then manager role/session/title', () => 
   assert.equal(resolveManagerPane(allPanes, { manager: { paneId: managerPane.paneId } }).paneId, managerPane.paneId);
   assert.equal(resolveManagerPane(allPanes, { manager: { paneId: '%missing' } }).paneId, managerPane.paneId);
   assert.equal(resolveManagerPane(panes, { manager: { paneId: '%missing' } }), undefined);
+});
+
+test('jump history supports flipping between the last two panes', () => {
+  const panes = parsePaneRows(sampleRows, '%128');
+  const state = {};
+
+  updateJumpHistory(state, '%128', '%125', 1_000);
+  assert.deepEqual(state.navigation, { currentPaneId: '%125', previousPaneId: '%128', updatedAt: 1_000 });
+  assert.equal(resolveFlipPane(panes, state, '%125').paneId, '%128');
+
+  updateJumpHistory(state, '%125', '%096', 2_000);
+  assert.deepEqual(state.navigation, { currentPaneId: '%096', previousPaneId: '%125', updatedAt: 2_000 });
+  assert.equal(resolveFlipPane(panes, state, '%096').paneId, '%125');
+  assert.equal(resolveFlipPane(panes, state, '%128').paneId, '%096');
+  assert.equal(resolveFlipPane(panes, { navigation: { currentPaneId: '%missing', previousPaneId: '%gone' } }, '%128'), undefined);
 });
 
 test('computeScrollOffset keeps selected row visible in a clipped viewport', () => {

@@ -2,7 +2,7 @@
 
 A [pi](https://pi.dev) extension for tmux-heavy agent coordination.
 
-It adds a `/tmux` command that opens a preview-first tmux pane switcher inside pi, plus mobile-friendly subcommands for listing, quick jumping, previewing, sending, linking, tagging, spawning visible pi/shell panes, and opening a global `/mgr` tmux manager agent.
+It adds a `/tmux` command that opens a preview-first tmux pane switcher inside pi, plus mobile-friendly subcommands for listing, quick jumping, flipping between panes, previewing, sending, linking, tagging, spawning visible pi/shell panes, and opening a global `/mgr` tmux manager agent.
 
 ## Install
 
@@ -44,6 +44,8 @@ Mobile-friendly command flow:
 ```text
 /tmux list
 /tmux <number|pane-id|target>
+/flip
+/tmux flip
 /tmux preview <number|pane-id|target>
 /tmux jump <number|pane-id|target>
 /tmux send <number|pane-id|target> <message>
@@ -61,6 +63,7 @@ Examples:
 ```text
 /tmux list
 /tmux 3
+/flip
 /tmux preview 3
 /tmux jump %129
 /tmux send infra:2.1 please summarize status
@@ -75,8 +78,9 @@ Examples:
 
 - Opens a right-side overlay on wide terminals.
 - Opens a full-width centered overlay on narrow/mobile terminals.
-- Uses clean mobile labels on narrow terminals and `/tmux list`, hiding titles, tasks, Workgraph IDs, roles, and other cockpit detail.
+- Uses mobile labels on narrow terminals and `/tmux list` that show pane target plus useful description/title, e.g. `1. ● infra:1.1 — pi · experiments`.
 - `/tmux <selector>` quick-jumps for fast mobile pane switching.
+- `/flip` and `/tmux flip` toggle back to the previous pane recorded by `/tmux`, `/mgr`, or overlay Jump.
 - Lists tmux panes grouped by current pane, related cwd, other agents, and shells.
 - Uses tmux metadata for identity before preview: session/window/pane, `%pane_id`, command, cwd, title.
 - `Enter` previews recent pane output.
@@ -107,7 +111,7 @@ Pane metadata is stored at:
 ~/.pi/agent/tmux-panel-state.json
 ```
 
-The state file records optional parent pane, role, task, Workgraph task tags, activity decay metadata keyed by stable `%pane_id`, and the global manager pane id/target.
+The state file records optional parent pane, role, task, Workgraph task tags, activity decay metadata keyed by stable `%pane_id`, jump history for `/flip`, and the global manager pane id/target.
 
 ## Keys
 

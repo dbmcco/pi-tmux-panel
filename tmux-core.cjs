@@ -111,23 +111,14 @@ function formatPaneCompactLabel(number, pane) {
   return `${number}. ${pane.target} ${paneMetaParts(pane)} — ${title}${suffix}`;
 }
 
-function cleanMobileRole(pane) {
-  if (pane.isCurrent) return 'current';
-  if (pane.role === 'manager' || pane.sessionName === 'pi-manager' || /tmux manager/i.test(pane.title || '')) return 'mgr';
-  if (pane.relation) return pane.relation;
-  if (pane.kind === 'shell') return 'shell';
-  return 'agent';
+function paneDescription(pane) {
+  return pane.title || pane.task || pane.command || pane.cwd || pane.repo || '';
 }
 
 function formatPaneCleanMobileLabel(number, pane) {
-  const parts = [
-    `${number}.`,
-    pane.statusGlyph,
-    cleanMobileRole(pane),
-    pane.kind,
-    pane.repo,
-  ];
-  return parts.filter(Boolean).join(' ');
+  const parts = [`${number}.`, pane.statusGlyph, pane.target].filter(Boolean).join(' ');
+  const description = paneDescription(pane);
+  return description ? `${parts} — ${description}` : parts;
 }
 
 function flattenGroups(groups) {
@@ -153,6 +144,7 @@ function parseTmuxCommandArgs(args) {
   if (!trimmed) return { action: 'open' };
   const [action, selector, ...rest] = trimmed.split(/\s+/);
   if (action === 'list') return { action: 'list' };
+  if (action === 'flip') return { action: 'flip' };
   if (action === 'preview' || action === 'jump') return { action, selector };
   if (/^(\d+|%\d+|[^\s:]+:\d+(?:\.\d+)?)$/.test(trimmed)) return { action: 'jump', selector: trimmed };
   if (action === 'send') return { action, selector, message: rest.join(' ') };
@@ -364,6 +356,28 @@ function resolveManagerPane(panes, state) {
   );
 }
 
+function updateJumpHistory(state, fromPaneId, toPaneId, now = Date.now()) {
+  if (!fromPaneId || !toPaneId || fromPaneId === toPaneId) return state;
+  state.navigation = {
+    currentPaneId: toPaneId,
+    previousPaneId: fromPaneId,
+    updatedAt: now,
+  };
+  return state;
+}
+
+function resolveFlipPane(panes, state, currentPaneId) {
+  const previousPaneId = state?.navigation?.previousPaneId;
+  const lastPaneId = state?.navigation?.currentPaneId;
+  const preferredPaneId = currentPaneId === lastPaneId ? previousPaneId : lastPaneId;
+  if (preferredPaneId && preferredPaneId !== currentPaneId) {
+    const preferred = panes.find((pane) => pane.paneId === preferredPaneId);
+    if (preferred) return preferred;
+  }
+  const fallbackPaneId = preferredPaneId === previousPaneId ? lastPaneId : previousPaneId;
+  return fallbackPaneId && fallbackPaneId !== currentPaneId ? panes.find((pane) => pane.paneId === fallbackPaneId) : undefined;
+}
+
 function getOverlayOptions(columns) {
   const width = Number(columns || 0);
   if (width > 0 && width < 100) {
@@ -432,6 +446,8 @@ module.exports = {
   buildManagerSessionArgs,
   buildManagerWindowArgs,
   resolveManagerPane,
+  updateJumpHistory,
+  resolveFlipPane,
   MANAGER_SESSION_NAME,
   LIST_PANES_FORMAT,
   computeScrollOffset,

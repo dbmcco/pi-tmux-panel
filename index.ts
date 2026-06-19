@@ -48,7 +48,18 @@ type ManagerMetadata = {
 	createdAt?: number;
 };
 
-type PanelState = { panes: Record<string, PaneMetadata>; activity: Record<string, ActivityMetadata>; manager?: ManagerMetadata };
+type NavigationMetadata = {
+	currentPaneId?: string;
+	previousPaneId?: string;
+	updatedAt?: number;
+};
+
+type PanelState = {
+	panes: Record<string, PaneMetadata>;
+	activity: Record<string, ActivityMetadata>;
+	manager?: ManagerMetadata;
+	navigation?: NavigationMetadata;
+};
 
 type PaneGroup = { title: string; panes: Pane[] };
 
@@ -78,6 +89,8 @@ const {
 	buildManagerSessionArgs: coreBuildManagerSessionArgs,
 	buildManagerWindowArgs: coreBuildManagerWindowArgs,
 	resolveManagerPane: coreResolveManagerPane,
+	updateJumpHistory: coreUpdateJumpHistory,
+	resolveFlipPane: coreResolveFlipPane,
 	MANAGER_SESSION_NAME: coreManagerSessionName,
 	computeScrollOffset,
 	computeManualScrollOffset,
@@ -106,13 +119,16 @@ const {
 		| { action: "link"; selector?: string; role?: string }
 		| { action: "unlink"; selector?: string }
 		| { action: "wg"; selector?: string; taskId?: string }
-		| { action: "spawn"; kind?: string; task?: string };
+		| { action: "spawn"; kind?: string; task?: string }
+		| { action: "flip" };
 	getOverlayOptions: (columns?: number) => Record<string, unknown>;
 	enrichPaneMetadata: (pane: Pane, state: PanelState, currentPaneId?: string, capturedText?: string) => Pane;
 	buildSpawnWindowArgs: (cwd: string, kind: string, task?: string) => string[];
 	buildManagerSessionArgs?: (cwd: string) => string[];
 	buildManagerWindowArgs?: (cwd: string) => string[];
 	resolveManagerPane?: (panes: Pane[], state: PanelState) => Pane | undefined;
+	updateJumpHistory?: (state: PanelState, fromPaneId?: string, toPaneId?: string, now?: number) => PanelState;
+	resolveFlipPane?: (panes: Pane[], state: PanelState, currentPaneId?: string) => Pane | undefined;
 	MANAGER_SESSION_NAME?: string;
 	computeScrollOffset: (selectedRowIndex: number, currentOffset: number, viewportSize: number) => number;
 	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
@@ -205,12 +221,9 @@ function localShellQuote(value: string): string {
 }
 
 function fallbackFormatPaneCleanMobileLabel(number: number, pane: Pane): string {
-	const role = pane.isCurrent
-		? "current"
-		: pane.role === "manager" || pane.sessionName === MANAGER_SESSION_NAME || /tmux manager/i.test(pane.title || "")
-			? "mgr"
-			: pane.relation || (pane.kind === "shell" ? "shell" : "agent");
-	return [`${number}.`, pane.statusGlyph, role, pane.kind, pane.repo].filter(Boolean).join(" ");
+	const prefix = [`${number}.`, pane.statusGlyph, pane.target].filter(Boolean).join(" ");
+	const description = pane.title || pane.task || pane.command || pane.cwd || pane.repo || "";
+	return description ? `${prefix} — ${description}` : prefix;
 }
 
 const formatPaneCleanMobileLabel = coreFormatPaneCleanMobileLabel ?? fallbackFormatPaneCleanMobileLabel;
@@ -253,8 +266,30 @@ function fallbackResolveManagerPane(panes: Pane[], state: PanelState): Pane | un
 
 const resolveManagerPane = coreResolveManagerPane ?? fallbackResolveManagerPane;
 
-function parseTmuxCommandArgs(args: string): ReturnType<typeof coreParseTmuxCommandArgs> {
+function fallbackUpdateJumpHistory(state: PanelState, fromPaneId?: string, toPaneId?: string, now = Date.now()): PanelState {
+	if (!fromPaneId || !toPaneId || fromPaneId === toPaneId) return state;
+	state.navigation = { currentPaneId: toPaneId, previousPaneId: fromPaneId, updatedAt: now };
+	return state;
+}
+
+function fallbackResolveFlipPane(panes: Pane[], state: PanelState, currentPaneId?: string): Pane | undefined {
+	const previousPaneId = state.navigation?.previousPaneId;
+	const lastPaneId = state.navigation?.currentPaneId;
+	const preferredPaneId = currentPaneId === lastPaneId ? previousPaneId : lastPaneId;
+	if (preferredPaneId && preferredPaneId !== currentPaneId) {
+		const preferred = panes.find((pane) => pane.paneId === preferredPaneId);
+		if (preferred) return preferred;
+	}
+	const fallbackPaneId = preferredPaneId === previousPaneId ? lastPaneId : previousPaneId;
+	return fallbackPaneId && fallbackPaneId !== currentPaneId ? panes.find((pane) => pane.paneId === fallbackPaneId) : undefined;
+}
+
+const updateJumpHistory = coreUpdateJumpHistory ?? fallbackUpdateJumpHistory;
+const resolveFlipPane = coreResolveFlipPane ?? fallbackResolveFlipPane;
+
+function parseTmuxCommandArgs(args: string): ReturnType<typeof coreParseTmuxCommandArgs> | { action: "flip" } {
 	const parsed = coreParseTmuxCommandArgs(args);
+	if (parsed.action === "open" && parsed.query === "flip") return { action: "flip" };
 	if (parsed.action === "open" && parsed.query && /^(\d+|%\d+|[^\s:]+:\d+(?:\.\d+)?)$/.test(parsed.query)) {
 		return { action: "jump", selector: parsed.query };
 	}
@@ -270,6 +305,7 @@ function loadPanelState(): PanelState {
 			panes: parsed?.panes && typeof parsed.panes === "object" ? parsed.panes : {},
 			activity: parsed?.activity && typeof parsed.activity === "object" ? parsed.activity : {},
 			manager: parsed?.manager && typeof parsed.manager === "object" ? parsed.manager : undefined,
+			navigation: parsed?.navigation && typeof parsed.navigation === "object" ? parsed.navigation : undefined,
 		};
 	} catch {
 		return { panes: {}, activity: {} };
@@ -341,6 +377,12 @@ async function jumpToPane(pi: ExtensionAPI, pane: Pane): Promise<void> {
 	for (const args of buildJumpSteps(pane, clientName || undefined)) {
 		await runTmux(pi, args);
 	}
+}
+
+async function recordAndJumpToPane(pi: ExtensionAPI, pane: Pane, state: PanelState): Promise<void> {
+	updateJumpHistory(state, process.env.TMUX_PANE, pane.paneId);
+	savePanelState(state);
+	await jumpToPane(pi, pane);
 }
 
 async function sendToPane(pi: ExtensionAPI, pane: Pane, message: string): Promise<void> {
@@ -698,7 +740,29 @@ export default function (pi: ExtensionAPI) {
 				};
 				savePanelState(state);
 			}
-			await jumpToPane(pi, managerPane);
+			await recordAndJumpToPane(pi, managerPane, state);
+		},
+	});
+
+	pi.registerCommand("flip", {
+		description: "Flip back to the previous tmux pane",
+		handler: async (_args, ctx) => {
+			if (!process.env.TMUX) {
+				ctx.ui.notify("/flip is only available inside tmux.", "warning");
+				return;
+			}
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("/flip requires interactive TUI mode.", "warning");
+				return;
+			}
+			const state = loadPanelState();
+			const panes = await loadPanes(pi, ctx, state);
+			const pane = resolveFlipPane(panes, state, process.env.TMUX_PANE);
+			if (!pane) {
+				ctx.ui.notify("No previous pane yet. Use /tmux list or /tmux <number> first.", "warning");
+				return;
+			}
+			await recordAndJumpToPane(pi, pane, state);
 		},
 	});
 
@@ -740,9 +804,19 @@ export default function (pi: ExtensionAPI) {
 				previewOutput = await capturePane(pi, previewPane);
 			}
 
+			if (parsed.action === "flip") {
+				const pane = resolveFlipPane(panes, state, process.env.TMUX_PANE);
+				if (!pane) {
+					ctx.ui.notify("No previous pane yet. Use /tmux list or /tmux <number> first.", "warning");
+					return;
+				}
+				await recordAndJumpToPane(pi, pane, state);
+				return;
+			}
+
 			if (parsed.action === "jump") {
 				const pane = resolveRequestedPane(parsed.selector);
-				if (pane) await jumpToPane(pi, pane);
+				if (pane) await recordAndJumpToPane(pi, pane, state);
 				return;
 			}
 
@@ -851,7 +925,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				if (result.type === "jump") {
-					await jumpToPane(pi, pane);
+					await recordAndJumpToPane(pi, pane, state);
 					return;
 				}
 
