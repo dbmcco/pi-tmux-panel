@@ -71,7 +71,7 @@ const {
 	computeScrollOffset,
 	computeManualScrollOffset,
 	formatCaptureError,
-	computePaneActivity,
+	computePaneActivity: coreComputePaneActivity,
 } = core as {
 	parsePaneRows: (output: string, currentPaneId?: string) => Pane[];
 	groupPanes: (panes: Pane[], currentCwd?: string) => PaneGroup[];
@@ -100,13 +100,72 @@ const {
 	computeScrollOffset: (selectedRowIndex: number, currentOffset: number, viewportSize: number) => number;
 	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
 	formatCaptureError: (pane: Pane, errorMessage: unknown) => string;
-	computePaneActivity: (
+	computePaneActivity?: (
 		pane: Pane,
 		capturedText: string,
 		previousActivity?: ActivityMetadata,
 		now?: number,
 	) => { status: string; statusGlyph: string; activity: ActivityMetadata };
 };
+
+function fallbackStatusGlyph(status: string): string {
+	return (
+		{
+			active: "●",
+			recent: "◐",
+			cooling: "◌",
+			idle: "○",
+			"needs-input": "◆",
+			done: "✓",
+			error: "!",
+			unknown: "?",
+		} as Record<string, string>
+	)[status] || "?";
+}
+
+function fallbackHashText(text: string): string {
+	let hash = 5381;
+	for (let index = 0; index < text.length; index++) hash = ((hash << 5) + hash) ^ text.charCodeAt(index);
+	return (hash >>> 0).toString(16);
+}
+
+function fallbackStatusOverride(pane: Pane, capturedText: string): string | undefined {
+	const text = `${pane.title || ""}\n${capturedText || ""}`.toLowerCase();
+	if (/password:|\b(confirm|allow|deny|continue\?|proceed\?|select one|waiting for input|press enter)\b/.test(text)) return "needs-input";
+	if (/\b(traceback|exception|panic|failed|failure|fatal|error:|command not found)\b/.test(text)) return "error";
+	if (/\b(done|complete|completed|success|succeeded|finished|ready)\b/.test(text)) return "done";
+	return undefined;
+}
+
+function fallbackComputePaneActivity(
+	pane: Pane,
+	capturedText: string,
+	previousActivity?: ActivityMetadata,
+	now = Date.now(),
+): { status: string; statusGlyph: string; activity: ActivityMetadata } {
+	const contentHash = fallbackHashText(capturedText || "");
+	const isFirstSeen = !previousActivity?.lastHash;
+	const changed = !isFirstSeen && previousActivity?.lastHash !== contentHash;
+	const lastChangedAt = changed ? now : previousActivity?.lastChangedAt ?? now;
+	const override = fallbackStatusOverride(pane, capturedText);
+	let status = override;
+	if (!status && isFirstSeen) status = pane.kind === "shell" ? "idle" : "unknown";
+	else if (!status && changed) status = "active";
+	else if (!status) {
+		const age = Math.max(0, now - lastChangedAt);
+		if (age < 60_000) status = "active";
+		else if (age < 5 * 60_000) status = "recent";
+		else if (age < 20 * 60_000) status = "cooling";
+		else status = "idle";
+	}
+	return {
+		status,
+		statusGlyph: fallbackStatusGlyph(status),
+		activity: { lastHash: contentHash, lastChangedAt, lastSeenAt: now, lastStatus: status },
+	};
+}
+
+const computePaneActivity = coreComputePaneActivity ?? fallbackComputePaneActivity;
 
 const LIST_PANES_FORMAT = [
 	"#{session_name}:#{window_index}.#{pane_index}",
