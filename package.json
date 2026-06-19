@@ -1,6 +1,6 @@
 {
   "name": "pi-tmux-panel",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A pi extension that adds a preview-first tmux pane switcher, mobile command flow, pane links, Workgraph tags, and visible pi spawning.",
   "type": "commonjs",
   "private": false,

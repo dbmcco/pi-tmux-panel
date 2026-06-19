@@ -23,6 +23,7 @@ const {
   formatCaptureError,
   computePaneActivity,
   statusGlyph,
+  normalizeRenderLines,
 } = require('../tmux-core.cjs');
 
 const sampleRows = [
@@ -268,4 +269,10 @@ test('computePaneActivity overrides decay for needs-input, done, and error signa
   assert.equal(computePaneActivity(pane, 'Traceback: failed with exception', previous, 2_000).status, 'error');
   assert.equal(statusGlyph('needs-input'), '◆');
   assert.equal(statusGlyph('cooling'), '◌');
+});
+
+test('normalizeRenderLines pads short renders to clear stale overlay rows', () => {
+  assert.deepEqual(normalizeRenderLines(['one', 'two'], 4), ['one', 'two', '', '']);
+  assert.deepEqual(normalizeRenderLines(['one', 'two', 'three'], 2), ['one', 'two']);
+  assert.deepEqual(normalizeRenderLines(['one'], 0), ['one']);
 });

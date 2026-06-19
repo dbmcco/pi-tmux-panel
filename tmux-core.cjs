@@ -313,6 +313,14 @@ function formatCaptureError(pane, errorMessage) {
   return `Preview failed for ${pane.target} (${pane.paneId})\n${message}`;
 }
 
+function normalizeRenderLines(lines, targetLineCount) {
+  const target = Math.max(0, Number(targetLineCount || 0));
+  if (target <= 0) return lines;
+  const normalized = lines.slice(0, target);
+  while (normalized.length < target) normalized.push('');
+  return normalized;
+}
+
 module.exports = {
   inferKind,
   repoLabel,
@@ -339,4 +347,5 @@ module.exports = {
   computeScrollOffset,
   computeManualScrollOffset,
   formatCaptureError,
+  normalizeRenderLines,
 };

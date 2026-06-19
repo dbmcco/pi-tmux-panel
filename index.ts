@@ -71,6 +71,7 @@ const {
 	computeScrollOffset,
 	computeManualScrollOffset,
 	formatCaptureError,
+	normalizeRenderLines,
 	computePaneActivity: coreComputePaneActivity,
 } = core as {
 	parsePaneRows: (output: string, currentPaneId?: string) => Pane[];
@@ -100,6 +101,7 @@ const {
 	computeScrollOffset: (selectedRowIndex: number, currentOffset: number, viewportSize: number) => number;
 	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
 	formatCaptureError: (pane: Pane, errorMessage: unknown) => string;
+	normalizeRenderLines: (lines: string[], targetLineCount: number) => string[];
 	computePaneActivity?: (
 		pane: Pane,
 		capturedText: string,
@@ -402,8 +404,15 @@ function createPanel(options: {
 		return lines.map((line) => truncateToWidth(line, width));
 	}
 
+	function renderFrameLineCount(): number {
+		const rows = process.stdout.rows || 24;
+		const columns = process.stdout.columns || 0;
+		const overlayRatio = columns > 0 && columns < 100 ? 0.95 : 0.9;
+		return Math.max(8, Math.floor(rows * overlayRatio) - 2);
+	}
+
 	function previewViewportSize(): number {
-		return Math.max(5, (process.stdout.rows || 24) - 9);
+		return Math.max(5, renderFrameLineCount() - 7);
 	}
 
 	function renderPreview(width: number): string[] {
@@ -439,7 +448,8 @@ function createPanel(options: {
 
 	return {
 		render(width: number): string[] {
-			return previewPane ? renderPreview(width) : renderList(width);
+			const lines = previewPane ? renderPreview(width) : renderList(width);
+			return normalizeRenderLines(lines, renderFrameLineCount());
 		},
 		invalidate() {},
 		handleInput(data: string) {
