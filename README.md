@@ -80,7 +80,7 @@ Examples:
 - Opens a full-width centered overlay on narrow/mobile terminals.
 - Uses mobile labels on narrow terminals and `/tmux list` that show pane target plus useful description/title, e.g. `1. ● infra:1.1 — pi · experiments`.
 - `/tmux <selector>` quick-jumps for fast mobile pane switching.
-- `/flip` and `/tmux flip` toggle back to the previous pane recorded by `/tmux`, `/mgr`, or overlay Jump.
+- `/flip` and `/tmux flip` toggle back to the previous pane recorded by `/tmux`, `/mgr` Jump, or overlay Jump, with tmux native last-pane fallback when no extension history exists.
 - Lists tmux panes grouped by current pane, related cwd, other agents, and shells.
 - Uses tmux metadata for identity before preview: session/window/pane, `%pane_id`, command, cwd, title.
 - `Enter` previews recent pane output.
@@ -100,7 +100,7 @@ Examples:
 - Can associate panes with the current pane via `/tmux link`.
 - Can display Workgraph task IDs via `/tmux wg`; this is display-only and does not mutate Workgraph.
 - Can explicitly spawn visible pi/shell panes via `/tmux spawn`.
-- `/mgr` opens or creates one global visible tmux manager agent in the `pi-manager` tmux session.
+- `/mgr` opens a preview/control panel for the global manager agent; use `Jump` to go to it or `Send` to interact without leaving the current pane.
 - No global keyboard shortcuts are registered.
 
 ## State
@@ -150,7 +150,13 @@ Preview actions:
 /mgr
 ```
 
-`/mgr` opens or creates a single global manager agent for all tmux sessions. It lives in a visible tmux session/window named `pi-manager:manager`, uses a dedicated manager system prompt, and can inspect/control all panes through normal tmux/pi tools. Destructive actions remain confirmation-gated by prompt policy.
+`/mgr` opens or creates a single global manager agent for all tmux sessions, then shows it in a preview-first panel. From that panel you can:
+
+- `Jump` into the manager pane.
+- `Send` a message to the manager without leaving your current pane.
+- `Back`/`Close` without switching.
+
+The manager lives in a visible tmux session/window named `pi-manager:manager`, uses a dedicated manager system prompt, and can inspect/control all panes through normal tmux/pi tools. Destructive actions remain confirmation-gated by prompt policy.
 
 ## Verification
 

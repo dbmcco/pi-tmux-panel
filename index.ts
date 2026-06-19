@@ -385,6 +385,31 @@ async function recordAndJumpToPane(pi: ExtensionAPI, pane: Pane, state: PanelSta
 	await jumpToPane(pi, pane);
 }
 
+async function flipToPreviousPane(pi: ExtensionAPI, ctx: ExtensionCommandContext, state: PanelState, panes: Pane[]): Promise<void> {
+	const pane = resolveFlipPane(panes, state, process.env.TMUX_PANE);
+	if (pane) {
+		await recordAndJumpToPane(pi, pane, state);
+		return;
+	}
+
+	try {
+		const before = process.env.TMUX_PANE;
+		await runTmux(pi, ["last-pane"]);
+		let after = "";
+		try {
+			after = await runTmux(pi, ["display-message", "-p", "#{pane_id}"]);
+		} catch {
+			after = "";
+		}
+		if (after && before && after !== before) {
+			updateJumpHistory(state, before, after);
+			savePanelState(state);
+		}
+	} catch {
+		ctx.ui.notify("No previous pane yet. Use /tmux list or /tmux <number> first.", "warning");
+	}
+}
+
 async function sendToPane(pi: ExtensionAPI, pane: Pane, message: string): Promise<void> {
 	await runTmux(pi, buildSendKeysArgs(pane, message));
 }
@@ -730,6 +755,8 @@ export default function (pi: ExtensionAPI) {
 			if (!managerPane) {
 				managerPane = await createManagerPane(pi, ctx.cwd, state);
 				ctx.ui.notify(`Created central manager in ${managerPane.target}`, "info");
+				panes = await loadPanes(pi, ctx, state);
+				managerPane = resolveManagerPane(panes, state) ?? managerPane;
 			} else if (managerPane.paneId !== state.manager?.paneId) {
 				state.manager = { paneId: managerPane.paneId, target: managerPane.target, createdAt: state.manager?.createdAt ?? Date.now() };
 				state.panes[managerPane.paneId] = {
@@ -740,7 +767,32 @@ export default function (pi: ExtensionAPI) {
 				};
 				savePanelState(state);
 			}
-			await recordAndJumpToPane(pi, managerPane, state);
+
+			let previewPane: Pane | undefined = managerPane;
+			let previewOutput: string | undefined = await capturePane(pi, managerPane);
+			while (true) {
+				const groups = groupPanes(panes, ctx.cwd);
+				const result = await showPanel(ctx, groups, { previewPane, previewOutput });
+				if (!result || result.type === "close" || result.type === "back") return;
+				if (result.type === "refresh") {
+					panes = await loadPanes(pi, ctx, state);
+					previewPane = resolveManagerPane(panes, state) ?? managerPane;
+					previewOutput = previewPane ? await capturePane(pi, previewPane) : undefined;
+					continue;
+				}
+				if (result.type === "jump") {
+					await recordAndJumpToPane(pi, managerPane, state);
+					return;
+				}
+				if (result.type === "send") {
+					const message = await ctx.ui.input(`Send to manager ${managerPane.target}`, "message to send");
+					if (message?.trim()) {
+						await sendToPane(pi, managerPane, message.trim());
+						ctx.ui.notify(`Sent to manager ${managerPane.target}`, "info");
+					}
+					previewOutput = await capturePane(pi, managerPane);
+				}
+			}
 		},
 	});
 
@@ -757,12 +809,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const state = loadPanelState();
 			const panes = await loadPanes(pi, ctx, state);
-			const pane = resolveFlipPane(panes, state, process.env.TMUX_PANE);
-			if (!pane) {
-				ctx.ui.notify("No previous pane yet. Use /tmux list or /tmux <number> first.", "warning");
-				return;
-			}
-			await recordAndJumpToPane(pi, pane, state);
+			await flipToPreviousPane(pi, ctx, state, panes);
 		},
 	});
 
@@ -805,12 +852,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (parsed.action === "flip") {
-				const pane = resolveFlipPane(panes, state, process.env.TMUX_PANE);
-				if (!pane) {
-					ctx.ui.notify("No previous pane yet. Use /tmux list or /tmux <number> first.", "warning");
-					return;
-				}
-				await recordAndJumpToPane(pi, pane, state);
+				await flipToPreviousPane(pi, ctx, state, panes);
 				return;
 			}
 
