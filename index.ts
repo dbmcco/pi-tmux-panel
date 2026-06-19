@@ -68,17 +68,17 @@ const {
 	buildSendKeysArgs,
 	formatPaneLabel,
 	formatPaneCompactLabel,
-	formatPaneCleanMobileLabel,
+	formatPaneCleanMobileLabel: coreFormatPaneCleanMobileLabel,
 	flattenGroups,
 	resolvePaneSelector,
-	parseTmuxCommandArgs,
+	parseTmuxCommandArgs: coreParseTmuxCommandArgs,
 	getOverlayOptions,
 	enrichPaneMetadata,
 	buildSpawnWindowArgs,
-	buildManagerSessionArgs,
-	buildManagerWindowArgs,
-	resolveManagerPane,
-	MANAGER_SESSION_NAME,
+	buildManagerSessionArgs: coreBuildManagerSessionArgs,
+	buildManagerWindowArgs: coreBuildManagerWindowArgs,
+	resolveManagerPane: coreResolveManagerPane,
+	MANAGER_SESSION_NAME: coreManagerSessionName,
 	computeScrollOffset,
 	computeManualScrollOffset,
 	formatCaptureError,
@@ -92,7 +92,7 @@ const {
 	buildSendKeysArgs: (pane: Pane, message: string) => string[];
 	formatPaneLabel: (pane: Pane) => string;
 	formatPaneCompactLabel: (number: number, pane: Pane) => string;
-	formatPaneCleanMobileLabel: (number: number, pane: Pane) => string;
+	formatPaneCleanMobileLabel?: (number: number, pane: Pane) => string;
 	flattenGroups: (groups: PaneGroup[]) => Array<{ number: number; groupTitle: string; pane: Pane }>;
 	resolvePaneSelector: (
 		flatItems: Array<{ number: number; groupTitle: string; pane: Pane }>,
@@ -110,10 +110,10 @@ const {
 	getOverlayOptions: (columns?: number) => Record<string, unknown>;
 	enrichPaneMetadata: (pane: Pane, state: PanelState, currentPaneId?: string, capturedText?: string) => Pane;
 	buildSpawnWindowArgs: (cwd: string, kind: string, task?: string) => string[];
-	buildManagerSessionArgs: (cwd: string) => string[];
-	buildManagerWindowArgs: (cwd: string) => string[];
-	resolveManagerPane: (panes: Pane[], state: PanelState) => Pane | undefined;
-	MANAGER_SESSION_NAME: string;
+	buildManagerSessionArgs?: (cwd: string) => string[];
+	buildManagerWindowArgs?: (cwd: string) => string[];
+	resolveManagerPane?: (panes: Pane[], state: PanelState) => Pane | undefined;
+	MANAGER_SESSION_NAME?: string;
 	computeScrollOffset: (selectedRowIndex: number, currentOffset: number, viewportSize: number) => number;
 	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
 	formatCaptureError: (pane: Pane, errorMessage: unknown) => string;
@@ -196,6 +196,70 @@ const LIST_PANES_FORMAT = [
 	"#{pane_title}",
 	"#{pane_pid}",
 ].join("\t");
+
+const MANAGER_SESSION_NAME = coreManagerSessionName ?? "pi-manager";
+const MANAGER_WINDOW_NAME = "manager";
+
+function localShellQuote(value: string): string {
+	return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function fallbackFormatPaneCleanMobileLabel(number: number, pane: Pane): string {
+	const role = pane.isCurrent
+		? "current"
+		: pane.role === "manager" || pane.sessionName === MANAGER_SESSION_NAME || /tmux manager/i.test(pane.title || "")
+			? "mgr"
+			: pane.relation || (pane.kind === "shell" ? "shell" : "agent");
+	return [`${number}.`, pane.statusGlyph, role, pane.kind, pane.repo].filter(Boolean).join(" ");
+}
+
+const formatPaneCleanMobileLabel = coreFormatPaneCleanMobileLabel ?? fallbackFormatPaneCleanMobileLabel;
+
+function fallbackManagerPrompt(): string {
+	return [
+		"You are the central tmux manager for Braydon's agent workspace.",
+		"",
+		"Your job is to monitor all tmux sessions, windows, and panes; identify coding agents, shells, idle panes, panes needing input, failed panes, and stale panes; and give concise mobile-friendly feedback.",
+		"",
+		"You may help the user switch panes, send messages to panes, spawn helper agents, and recommend cleanup. Require explicit confirmation before destructive actions including kill, interrupt, deletion, cleanup, or sending large prompts.",
+		"",
+		"Treat tmux as the source of process and workspace truth. Prefer preview-before-control. Use tmux-monitor status --all and tmux CLI inspection when you need current pane state. Keep responses short unless asked for detail.",
+	].join("\n");
+}
+
+function fallbackManagerCommand(): string {
+	return `pi --name 'tmux manager' --system-prompt ${localShellQuote(fallbackManagerPrompt())} ${localShellQuote("Open the central tmux manager. Start with a concise status summary and ask how you can help.")}`;
+}
+
+function fallbackBuildManagerSessionArgs(cwd: string): string[] {
+	return ["new-session", "-d", "-s", MANAGER_SESSION_NAME, "-n", MANAGER_WINDOW_NAME, "-P", "-F", LIST_PANES_FORMAT, "-c", cwd, fallbackManagerCommand()];
+}
+
+function fallbackBuildManagerWindowArgs(cwd: string): string[] {
+	return ["new-window", "-t", `${MANAGER_SESSION_NAME}:`, "-P", "-F", LIST_PANES_FORMAT, "-n", MANAGER_WINDOW_NAME, "-c", cwd, fallbackManagerCommand()];
+}
+
+const buildManagerSessionArgs = coreBuildManagerSessionArgs ?? fallbackBuildManagerSessionArgs;
+const buildManagerWindowArgs = coreBuildManagerWindowArgs ?? fallbackBuildManagerWindowArgs;
+
+function fallbackResolveManagerPane(panes: Pane[], state: PanelState): Pane | undefined {
+	const managerPaneId = state.manager?.paneId;
+	if (managerPaneId) {
+		const byState = panes.find((pane) => pane.paneId === managerPaneId);
+		if (byState) return byState;
+	}
+	return panes.find((pane) => pane.role === "manager" || pane.sessionName === MANAGER_SESSION_NAME || /tmux manager/i.test(pane.title || ""));
+}
+
+const resolveManagerPane = coreResolveManagerPane ?? fallbackResolveManagerPane;
+
+function parseTmuxCommandArgs(args: string): ReturnType<typeof coreParseTmuxCommandArgs> {
+	const parsed = coreParseTmuxCommandArgs(args);
+	if (parsed.action === "open" && parsed.query && /^(\d+|%\d+|[^\s:]+:\d+(?:\.\d+)?)$/.test(parsed.query)) {
+		return { action: "jump", selector: parsed.query };
+	}
+	return parsed;
+}
 
 const STATE_PATH = path.join(os.homedir(), ".pi", "agent", "tmux-panel-state.json");
 
