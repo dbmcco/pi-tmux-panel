@@ -96,7 +96,7 @@ const {
 	computeManualScrollOffset,
 	formatCaptureError,
 	normalizeRenderLines,
-	shouldIgnoreInitialPreviewEnter,
+	shouldIgnoreInitialPreviewEnter: coreShouldIgnoreInitialPreviewEnter,
 	computePaneActivity: coreComputePaneActivity,
 } = core as {
 	parsePaneRows: (output: string, currentPaneId?: string) => Pane[];
@@ -135,7 +135,7 @@ const {
 	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
 	formatCaptureError: (pane: Pane, errorMessage: unknown) => string;
 	normalizeRenderLines: (lines: string[], targetLineCount: number) => string[];
-	shouldIgnoreInitialPreviewEnter: (openedAt: number, now?: number, guardMs?: number) => boolean;
+	shouldIgnoreInitialPreviewEnter?: (openedAt: number, now?: number, guardMs?: number) => boolean;
 	computePaneActivity?: (
 		pane: Pane,
 		capturedText: string,
@@ -202,6 +202,9 @@ function fallbackComputePaneActivity(
 }
 
 const computePaneActivity = coreComputePaneActivity ?? fallbackComputePaneActivity;
+const shouldIgnoreInitialPreviewEnter =
+	coreShouldIgnoreInitialPreviewEnter ??
+	((openedAt: number, now = Date.now(), guardMs = 650): boolean => Boolean(openedAt) && Math.max(0, now - openedAt) < guardMs);
 
 const LIST_PANES_FORMAT = [
 	"#{session_name}:#{window_index}.#{pane_index}",
