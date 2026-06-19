@@ -1,0 +1,30 @@
+{
+  "name": "pi-tmux-panel",
+  "version": "0.1.0",
+  "description": "A pi extension that adds a preview-first tmux pane switcher, mobile command flow, pane links, Workgraph tags, and visible pi spawning.",
+  "type": "commonjs",
+  "private": false,
+  "license": "MIT",
+  "author": "Braydon McConnell",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "tmux",
+    "agent-coordination",
+    "terminal"
+  ],
+  "scripts": {
+    "test": "node --test test/tmux-core.test.cjs"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "tmux-core.cjs",
+    "README.md",
+    "LICENSE"
+  ]
+}
