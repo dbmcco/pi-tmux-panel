@@ -84,7 +84,7 @@ const {
 	resolvePaneSelector,
 	parseTmuxCommandArgs: coreParseTmuxCommandArgs,
 	getOverlayOptions,
-	enrichPaneMetadata,
+	enrichPaneMetadata: coreEnrichPaneMetadata,
 	buildSpawnWindowArgs,
 	buildManagerSessionArgs: coreBuildManagerSessionArgs,
 	buildManagerWindowArgs: coreBuildManagerWindowArgs,
@@ -123,7 +123,7 @@ const {
 		| { action: "spawn"; kind?: string; task?: string }
 		| { action: "flip" };
 	getOverlayOptions: (columns?: number) => Record<string, unknown>;
-	enrichPaneMetadata: (pane: Pane, state: PanelState, currentPaneId?: string, capturedText?: string) => Pane;
+	enrichPaneMetadata?: (pane: Pane, state: PanelState, currentPaneId?: string, capturedText?: string) => Pane;
 	buildSpawnWindowArgs: (cwd: string, kind: string, task?: string) => string[];
 	buildManagerSessionArgs?: (cwd: string) => string[];
 	buildManagerWindowArgs?: (cwd: string) => string[];
@@ -201,6 +201,23 @@ function fallbackComputePaneActivity(
 	};
 }
 
+function fallbackEnrichPaneMetadata(pane: Pane, state: PanelState, currentPaneId?: string, capturedText?: string): Pane {
+	const meta = state?.panes?.[pane.paneId] || {};
+	const relation = meta.parentPaneId === currentPaneId ? "child" : meta.parentPaneId ? "linked" : undefined;
+	const override = fallbackStatusOverride(pane, capturedText || "");
+	const status = override || (pane.kind === "shell" ? "idle" : ["pi", "codex", "claude", "opencode", "kilocode"].includes(pane.kind) ? "active" : "unknown");
+	return {
+		...pane,
+		status,
+		relation,
+		parentPaneId: meta.parentPaneId,
+		role: meta.role,
+		workgraphTaskId: meta.workgraphTaskId,
+		task: meta.task,
+	};
+}
+
+const enrichPaneMetadata = coreEnrichPaneMetadata ?? fallbackEnrichPaneMetadata;
 const computePaneActivity = coreComputePaneActivity ?? fallbackComputePaneActivity;
 const shouldIgnoreInitialPreviewEnter =
 	coreShouldIgnoreInitialPreviewEnter ??
