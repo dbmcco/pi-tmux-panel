@@ -42,6 +42,8 @@ Desktop overlay:
 Mobile-friendly command flow:
 
 ```text
+/tmux
+/tmux all
 /tmux list
 /tmux <number|pane-id|target>
 /flip
@@ -78,6 +80,8 @@ Examples:
 
 - Opens a right-side overlay on wide terminals.
 - Opens a full-width centered overlay on narrow/mobile terminals.
+- On narrow/mobile terminals, `/tmux` defaults to a smart attention-first shortlist so the global pane list does not overwhelm chat flow.
+- `/tmux all` forces the full global pane list when needed.
 - Uses mobile labels on narrow terminals and `/tmux list` that show pane target plus useful description/title, e.g. `1. ● infra:1.1 — pi · experiments`.
 - `/tmux <selector>` quick-jumps for fast mobile pane switching.
 - `/flip` and `/tmux flip` toggle back to the previous pane recorded by `/tmux`, `/mgr` Jump, or overlay Jump, with tmux native last-pane fallback when no extension history exists.

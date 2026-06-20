@@ -4,6 +4,7 @@ const test = require('node:test');
 const {
   parsePaneRows,
   groupPanes,
+  buildSmartMobileGroups,
   buildCaptureArgs,
   buildJumpSteps,
   buildSendKeysArgs,
@@ -66,6 +67,19 @@ test('groupPanes places current pane first, then related panes, then agents, the
   assert.deepEqual(groups[1].panes.map((pane) => pane.target), ['paia:7.1']);
   assert.deepEqual(groups[2].panes.map((pane) => pane.target), ['syn:6.1']);
   assert.deepEqual(groups[3].panes.map((pane) => pane.target), ['infra:2.1']);
+});
+
+test('buildSmartMobileGroups keeps a compact attention-first shortlist', () => {
+  const panes = parsePaneRows(sampleRows, '%128');
+  const manager = { ...panes[3], paneId: '%777', target: 'pi-manager:1.1', sessionName: 'pi-manager', title: 'tmux manager', role: 'manager', status: 'recent' };
+  const needsInput = { ...panes[2], paneId: '%888', target: 'paia:8.1', status: 'needs-input' };
+  const active = { ...panes[2], paneId: '%889', target: 'paia:9.1', status: 'active' };
+  const idle = { ...panes[1], paneId: '%890', target: 'idle:1.1', status: 'idle' };
+  const groups = groupPanes([panes[0], panes[1], manager, needsInput, active, idle], '/Users/braydon/projects/experiments');
+  const smart = buildSmartMobileGroups(groups, 4);
+
+  assert.equal(smart[0].title, 'Smart mobile shortlist');
+  assert.deepEqual(smart[0].panes.map((pane) => pane.target), ['infra:1.1', 'paia:8.1', 'paia:9.1', 'pi-manager:1.1']);
 });
 
 test('buildCaptureArgs captures recent output by stable pane id', () => {
@@ -144,6 +158,7 @@ test('formatPaneCleanMobileLabel shows target and description for mobile switchi
 test('parseTmuxCommandArgs supports mobile subcommands', () => {
   assert.deepEqual(parseTmuxCommandArgs(''), { action: 'open' });
   assert.deepEqual(parseTmuxCommandArgs('list'), { action: 'list' });
+  assert.deepEqual(parseTmuxCommandArgs('all'), { action: 'open', scope: 'all' });
   assert.deepEqual(parseTmuxCommandArgs('flip'), { action: 'flip' });
   assert.deepEqual(parseTmuxCommandArgs('preview 3'), { action: 'preview', selector: '3' });
   assert.deepEqual(parseTmuxCommandArgs('jump %129'), { action: 'jump', selector: '%129' });

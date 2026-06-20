@@ -74,6 +74,7 @@ type PanelResult =
 const {
 	parsePaneRows,
 	groupPanes,
+	buildSmartMobileGroups: coreBuildSmartMobileGroups,
 	buildCaptureArgs,
 	buildJumpSteps,
 	buildSendKeysArgs,
@@ -101,6 +102,7 @@ const {
 } = core as {
 	parsePaneRows: (output: string, currentPaneId?: string) => Pane[];
 	groupPanes: (panes: Pane[], currentCwd?: string) => PaneGroup[];
+	buildSmartMobileGroups?: (groups: PaneGroup[], limit?: number) => PaneGroup[];
 	buildCaptureArgs: (pane: Pane, lines?: number) => string[];
 	buildJumpSteps: (pane: Pane, clientName?: string) => string[][];
 	buildSendKeysArgs: (pane: Pane, message: string) => string[];
@@ -113,7 +115,7 @@ const {
 		selector?: string,
 	) => { number: number; groupTitle: string; pane: Pane } | undefined;
 	parseTmuxCommandArgs: (args: string) =>
-		| { action: "open"; query?: string }
+		| { action: "open"; query?: string; scope?: string }
 		| { action: "list" }
 		| { action: "preview" | "jump"; selector?: string }
 		| { action: "send"; selector?: string; message?: string }
@@ -271,6 +273,32 @@ const LIST_PANES_FORMAT = [
 	"#{pane_pid}",
 ].join("\t");
 
+function fallbackBuildSmartMobileGroups(groups: PaneGroup[], limit = 12): PaneGroup[] {
+	const seen = new Set<string>();
+	const priority = (pane: Pane): number => {
+		if (pane.isCurrent) return 5;
+		if (pane.status === "needs-input" || pane.statusGlyph === "◆") return 10;
+		if (pane.status === "error" || pane.statusGlyph === "!") return 20;
+		if (pane.status === "active" || pane.status === "recent" || pane.statusGlyph === "●" || pane.statusGlyph === "◐") return 30;
+		if (pane.role === "manager" || pane.sessionName === "pi-manager" || /tmux manager/i.test(pane.title || "")) return 40;
+		if (pane.status === "cooling" || pane.statusGlyph === "◌") return 60;
+		return 90;
+	};
+	const panes = flattenGroups(groups)
+		.map((item, index) => ({ pane: item.pane, index }))
+		.filter((item) => {
+			const key = item.pane.paneId || item.pane.target;
+			if (!key || seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		})
+		.sort((a, b) => priority(a.pane) - priority(b.pane) || a.index - b.index)
+		.slice(0, Math.max(1, Number(limit || 12)))
+		.map((item) => item.pane);
+	return panes.length > 0 ? [{ title: "Smart mobile shortlist", panes }] : [];
+}
+
+const buildSmartMobileGroups = coreBuildSmartMobileGroups ?? fallbackBuildSmartMobileGroups;
 const MANAGER_SESSION_NAME = coreManagerSessionName ?? "pi-manager";
 const MANAGER_WINDOW_NAME = "manager";
 
@@ -347,6 +375,7 @@ const resolveFlipPane = coreResolveFlipPane ?? fallbackResolveFlipPane;
 
 function parseTmuxCommandArgs(args: string): ReturnType<typeof coreParseTmuxCommandArgs> | { action: "flip" } {
 	const parsed = coreParseTmuxCommandArgs(args);
+	if (parsed.action === "open" && parsed.query === "all") return { action: "open", scope: "all" };
 	if (parsed.action === "open" && parsed.query === "flip") return { action: "flip" };
 	if (parsed.action === "open" && parsed.query && /^(\d+|%\d+|[^\s:]+:\d+(?:\.\d+)?)$/.test(parsed.query)) {
 		return { action: "jump", selector: parsed.query };
@@ -543,13 +572,14 @@ function createPanel(options: {
 	previewPane?: Pane;
 	previewOutput?: string;
 	initialQuery?: string;
+	forceFullList?: boolean;
 	initialActionIndex?: number;
 	ignoreInitialEnterMs?: number;
 	onDone: (result: PanelResult) => void;
 	theme: any;
 	tui: { requestRender: () => void };
 }) {
-	const { groups, previewPane, previewOutput, initialQuery = "", initialActionIndex = 0, ignoreInitialEnterMs = 0, onDone, theme, tui } = options;
+	const { groups, previewPane, previewOutput, initialQuery = "", forceFullList = false, initialActionIndex = 0, ignoreInitialEnterMs = 0, onDone, theme, tui } = options;
 	const openedAt = Date.now();
 	let selectedPaneIndex = 0;
 	let query = initialQuery;
@@ -564,8 +594,12 @@ function createPanel(options: {
 		{ label: "Close", result: () => ({ type: "close" }) },
 	];
 
+	function displayGroups(width = process.stdout.columns || 120): PaneGroup[] {
+		return width < 90 && !forceFullList && !query.trim() ? buildSmartMobileGroups(groups, 12) : groups;
+	}
+
 	function paneRows() {
-		return visibleRows(groups, query).filter((row): row is { kind: "pane"; pane: Pane } => row.kind === "pane");
+		return visibleRows(displayGroups(), query).filter((row): row is { kind: "pane"; pane: Pane } => row.kind === "pane");
 	}
 
 	function selectedPane(): Pane | undefined {
@@ -610,11 +644,13 @@ function createPanel(options: {
 
 	function renderList(width: number): string[] {
 		clampSelection();
-		const rows = visibleRows(groups, query);
+		const groupsForWidth = displayGroups(width);
+		const rows = visibleRows(groupsForWidth, query);
 		let paneOrdinal = -1;
 		const lines: string[] = [];
+		const smart = width < 90 && !forceFullList && !query.trim();
 		lines.push(theme.fg("accent", theme.bold("tmux panes")) + theme.fg("dim", "  / search • enter preview • r refresh • PgUp/PgDn • esc/q close"));
-		lines.push(theme.fg("dim", searching ? `search: ${query}_` : query ? `filter: ${query}` : "filter: all panes • numbers move selection"));
+		lines.push(theme.fg("dim", searching ? `search: ${query}_` : query ? `filter: ${query}` : smart ? "smart shortlist • /tmux all for full list" : "filter: all panes • numbers move selection"));
 		lines.push("");
 
 		if (rows.length === 0) {
@@ -796,7 +832,7 @@ function formatNumberedPaneList(groups: PaneGroup[]): string {
 async function showPanel(
 	ctx: ExtensionCommandContext,
 	groups: PaneGroup[],
-	state: { previewPane?: Pane; previewOutput?: string; query?: string; initialActionIndex?: number; ignoreInitialEnterMs?: number },
+	state: { previewPane?: Pane; previewOutput?: string; query?: string; forceFullList?: boolean; initialActionIndex?: number; ignoreInitialEnterMs?: number },
 ) {
 	return ctx.ui.custom<PanelResult | undefined>(
 		(tui, theme, _keybindings, done) =>
@@ -805,6 +841,7 @@ async function showPanel(
 				previewPane: state.previewPane,
 				previewOutput: state.previewOutput,
 				initialQuery: state.query,
+				forceFullList: state.forceFullList,
 				initialActionIndex: state.initialActionIndex,
 				ignoreInitialEnterMs: state.ignoreInitialEnterMs,
 				theme,
@@ -915,6 +952,7 @@ export default function (pi: ExtensionAPI) {
 			let previewPane: Pane | undefined;
 			let previewOutput: string | undefined;
 			let query = parsed.action === "open" ? (parsed.query ?? "") : "";
+			const forceFullList = parsed.action === "open" && parsed.scope === "all";
 
 			const resolveRequestedPane = (selector?: string): Pane | undefined => {
 				const item = resolvePaneSelector(flat, selector);
@@ -1017,7 +1055,7 @@ export default function (pi: ExtensionAPI) {
 
 			while (true) {
 				const groups = groupPanes(panes, ctx.cwd);
-				const result = await showPanel(ctx, groups, { previewPane, previewOutput, query });
+				const result = await showPanel(ctx, groups, { previewPane, previewOutput, query, forceFullList });
 				if (!result || result.type === "close") return;
 
 				if (result.type === "refresh") {

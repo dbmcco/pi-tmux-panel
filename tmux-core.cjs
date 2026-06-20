@@ -70,6 +70,33 @@ function groupPanes(panes, currentCwd) {
   return groups.filter((group) => group.panes.length > 0);
 }
 
+function mobilePanePriority(pane) {
+  if (pane.isCurrent) return 5;
+  if (pane.status === 'needs-input' || pane.statusGlyph === '◆') return 10;
+  if (pane.status === 'error' || pane.statusGlyph === '!') return 20;
+  if (pane.status === 'active' || pane.status === 'recent' || pane.statusGlyph === '●' || pane.statusGlyph === '◐') return 30;
+  if (pane.role === 'manager' || pane.sessionName === 'pi-manager' || /tmux manager/i.test(pane.title || '')) return 40;
+  if (pane.status === 'cooling' || pane.statusGlyph === '◌') return 60;
+  if (pane.status === 'done' || pane.statusGlyph === '✓') return 80;
+  return 90;
+}
+
+function buildSmartMobileGroups(groups, limit = 12) {
+  const seen = new Set();
+  const panes = flattenGroups(groups)
+    .map((item, index) => ({ pane: item.pane, index }))
+    .filter((item) => {
+      const key = item.pane.paneId || item.pane.target;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => mobilePanePriority(a.pane) - mobilePanePriority(b.pane) || a.index - b.index)
+    .slice(0, Math.max(1, Number(limit || 12)))
+    .map((item) => item.pane);
+  return panes.length > 0 ? [{ title: 'Smart mobile shortlist', panes }] : [];
+}
+
 function buildCaptureArgs(pane, lines = 80) {
   return ['capture-pane', '-t', pane.paneId, '-p', '-e', '-S', `-${lines}`];
 }
@@ -144,6 +171,7 @@ function parseTmuxCommandArgs(args) {
   if (!trimmed) return { action: 'open' };
   const [action, selector, ...rest] = trimmed.split(/\s+/);
   if (action === 'list') return { action: 'list' };
+  if (action === 'all') return { action: 'open', scope: 'all' };
   if (action === 'flip') return { action: 'flip' };
   if (action === 'preview' || action === 'jump') return { action, selector };
   if (/^(\d+|%\d+|[^\s:]+:\d+(?:\.\d+)?)$/.test(trimmed)) return { action: 'jump', selector: trimmed };
@@ -428,6 +456,7 @@ module.exports = {
   repoLabel,
   parsePaneRows,
   groupPanes,
+  buildSmartMobileGroups,
   buildCaptureArgs,
   buildJumpSteps,
   buildSendKeysArgs,
