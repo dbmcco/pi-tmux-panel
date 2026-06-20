@@ -92,10 +92,10 @@ const {
 	updateJumpHistory: coreUpdateJumpHistory,
 	resolveFlipPane: coreResolveFlipPane,
 	MANAGER_SESSION_NAME: coreManagerSessionName,
-	computeScrollOffset,
-	computeManualScrollOffset,
-	formatCaptureError,
-	normalizeRenderLines,
+	computeScrollOffset: coreComputeScrollOffset,
+	computeManualScrollOffset: coreComputeManualScrollOffset,
+	formatCaptureError: coreFormatCaptureError,
+	normalizeRenderLines: coreNormalizeRenderLines,
 	shouldIgnoreInitialPreviewEnter: coreShouldIgnoreInitialPreviewEnter,
 	computePaneActivity: coreComputePaneActivity,
 } = core as {
@@ -131,10 +131,10 @@ const {
 	updateJumpHistory?: (state: PanelState, fromPaneId?: string, toPaneId?: string, now?: number) => PanelState;
 	resolveFlipPane?: (panes: Pane[], state: PanelState, currentPaneId?: string) => Pane | undefined;
 	MANAGER_SESSION_NAME?: string;
-	computeScrollOffset: (selectedRowIndex: number, currentOffset: number, viewportSize: number) => number;
-	computeManualScrollOffset: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
-	formatCaptureError: (pane: Pane, errorMessage: unknown) => string;
-	normalizeRenderLines: (lines: string[], targetLineCount: number) => string[];
+	computeScrollOffset?: (selectedRowIndex: number, currentOffset: number, viewportSize: number) => number;
+	computeManualScrollOffset?: (currentOffset: number, delta: number, totalRows: number, viewportSize: number) => number;
+	formatCaptureError?: (pane: Pane, errorMessage: unknown) => string;
+	normalizeRenderLines?: (lines: string[], targetLineCount: number) => string[];
 	shouldIgnoreInitialPreviewEnter?: (openedAt: number, now?: number, guardMs?: number) => boolean;
 	computePaneActivity?: (
 		pane: Pane,
@@ -217,7 +217,43 @@ function fallbackEnrichPaneMetadata(pane: Pane, state: PanelState, currentPaneId
 	};
 }
 
+function fallbackComputeScrollOffset(selectedRowIndex: number, currentOffset: number, viewportSize: number): number {
+	const viewport = Math.max(0, Number(viewportSize || 0));
+	if (viewport <= 0) return 0;
+	const selected = Math.max(0, Number(selectedRowIndex || 0));
+	const offset = Math.max(0, Number(currentOffset || 0));
+	if (selected < offset) return selected;
+	if (selected >= offset + viewport) return selected - viewport + 1;
+	return offset;
+}
+
+function fallbackComputeManualScrollOffset(currentOffset: number, delta: number, totalRows: number, viewportSize: number): number {
+	const total = Math.max(0, Number(totalRows || 0));
+	const viewport = Math.max(0, Number(viewportSize || 0));
+	if (viewport <= 0 || total <= viewport) return 0;
+	const maxOffset = Math.max(0, total - viewport);
+	const next = Math.max(0, Number(currentOffset || 0) + Number(delta || 0));
+	return Math.min(maxOffset, next);
+}
+
+function fallbackFormatCaptureError(pane: Pane, errorMessage: unknown): string {
+	const message = errorMessage instanceof Error ? errorMessage.message : String(errorMessage || "Unknown capture error");
+	return `Preview failed for ${pane.target} (${pane.paneId})\n${message}`;
+}
+
+function fallbackNormalizeRenderLines(lines: string[], targetLineCount: number): string[] {
+	const target = Math.max(0, Number(targetLineCount || 0));
+	if (target <= 0) return lines;
+	const normalized = lines.slice(0, target);
+	while (normalized.length < target) normalized.push("");
+	return normalized;
+}
+
 const enrichPaneMetadata = coreEnrichPaneMetadata ?? fallbackEnrichPaneMetadata;
+const computeScrollOffset = coreComputeScrollOffset ?? fallbackComputeScrollOffset;
+const computeManualScrollOffset = coreComputeManualScrollOffset ?? fallbackComputeManualScrollOffset;
+const formatCaptureError = coreFormatCaptureError ?? fallbackFormatCaptureError;
+const normalizeRenderLines = coreNormalizeRenderLines ?? fallbackNormalizeRenderLines;
 const computePaneActivity = coreComputePaneActivity ?? fallbackComputePaneActivity;
 const shouldIgnoreInitialPreviewEnter =
 	coreShouldIgnoreInitialPreviewEnter ??
@@ -361,6 +397,17 @@ async function loadPanes(pi: ExtensionAPI, ctx: ExtensionCommandContext, state: 
 		...pane,
 		isCurrent: pane.paneId === process.env.TMUX_PANE,
 	}));
+	const livePaneIds = new Set(rawPanes.map((pane) => pane.paneId));
+	if (
+		state.navigation &&
+		state.navigation.currentPaneId &&
+		state.navigation.previousPaneId &&
+		!livePaneIds.has(state.navigation.currentPaneId) &&
+		!livePaneIds.has(state.navigation.previousPaneId)
+	) {
+		delete state.navigation;
+	}
+
 	const now = Date.now();
 	const panes = await Promise.all(
 		rawPanes.map(async (pane) => {
