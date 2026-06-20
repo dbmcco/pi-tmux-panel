@@ -418,6 +418,13 @@ function resolveFlipPane(panes, state, currentPaneId) {
   return fallbackPaneId && fallbackPaneId !== currentPaneId ? panes.find((pane) => pane.paneId === fallbackPaneId) : undefined;
 }
 
+function resolvePanelViewMode(configuredView, columns, threshold = 100) {
+  if (configuredView === 'mobile' || configuredView === 'desktop') return configuredView;
+  const width = Number(columns || 0);
+  const cutoff = Math.max(1, Number(threshold || 100));
+  return width > 0 && width < cutoff ? 'mobile' : 'desktop';
+}
+
 function getOverlayOptions(columns) {
   const width = Number(columns || 0);
   if (width > 0 && width < 100) {
@@ -513,6 +520,7 @@ module.exports = {
   flattenGroups,
   resolvePaneSelector,
   parseTmuxCommandArgs,
+  resolvePanelViewMode,
   getOverlayOptions,
   inferPaneStatus,
   enrichPaneMetadata,

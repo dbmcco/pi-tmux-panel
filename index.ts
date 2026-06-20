@@ -86,6 +86,7 @@ const {
 	flattenGroups,
 	resolvePaneSelector,
 	parseTmuxCommandArgs: coreParseTmuxCommandArgs,
+	resolvePanelViewMode: coreResolvePanelViewMode,
 	getOverlayOptions,
 	enrichPaneMetadata: coreEnrichPaneMetadata,
 	buildSpawnWindowArgs,
@@ -118,6 +119,7 @@ const {
 		flatItems: Array<{ number: number; groupTitle: string; pane: Pane }>,
 		selector?: string,
 	) => { number: number; groupTitle: string; pane: Pane } | undefined;
+	resolvePanelViewMode?: (configuredView?: string, columns?: number, threshold?: number) => "mobile" | "desktop";
 	parseTmuxCommandArgs: (args: string) =>
 		| { action: "open"; query?: string; scope?: string }
 		| { action: "list" }
@@ -386,6 +388,32 @@ function fallbackFinalizeNumericJumpInput(
 const resolveNumericJumpInput = coreResolveNumericJumpInput ?? fallbackResolveNumericJumpInput;
 const finalizeNumericJumpInput = coreFinalizeNumericJumpInput ?? fallbackFinalizeNumericJumpInput;
 
+function fallbackResolvePanelViewMode(configuredView?: string, columns?: number, threshold = 100): "mobile" | "desktop" {
+	if (configuredView === "mobile" || configuredView === "desktop") return configuredView;
+	const width = Number(columns || 0);
+	const cutoff = Math.max(1, Number(threshold || 100));
+	return width > 0 && width < cutoff ? "mobile" : "desktop";
+}
+
+const resolvePanelViewMode = coreResolvePanelViewMode ?? fallbackResolvePanelViewMode;
+
+function loadRuntimeViewState(): { view?: string; threshold?: number } {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(VIEW_STATE_PATH, "utf8"));
+		return {
+			view: ["mobile", "desktop", "auto"].includes(parsed?.view) ? parsed.view : undefined,
+			threshold: Number.isFinite(Number(parsed?.threshold)) && Number(parsed.threshold) > 0 ? Number(parsed.threshold) : undefined,
+		};
+	} catch {
+		return {};
+	}
+}
+
+function currentPanelViewMode(): "mobile" | "desktop" {
+	const state = loadRuntimeViewState();
+	return resolvePanelViewMode(state.view, process.stdout.columns || Number(process.env.COLUMNS) || 0, state.threshold ?? 100);
+}
+
 function fallbackManagerPrompt(): string {
 	return [
 		"You are the central tmux manager for Braydon's agent workspace.",
@@ -456,6 +484,7 @@ function parseTmuxCommandArgs(args: string): ReturnType<typeof coreParseTmuxComm
 }
 
 const STATE_PATH = path.join(os.homedir(), ".pi", "agent", "tmux-panel-state.json");
+const VIEW_STATE_PATH = path.join(os.homedir(), ".pi", "agent", "runtime-view-switcher.json");
 
 function loadPanelState(): PanelState {
 	try {
@@ -668,8 +697,12 @@ function createPanel(options: {
 		{ label: "Close", result: () => ({ type: "close" }) },
 	];
 
-	function displayGroups(width = process.stdout.columns || 120): PaneGroup[] {
-		return width < 90 && !forceFullList && !query.trim() ? buildSmartMobileGroups(groups, 12) : groups;
+	function panelMode(): "mobile" | "desktop" {
+		return currentPanelViewMode();
+	}
+
+	function displayGroups(mode = panelMode()): PaneGroup[] {
+		return mode === "mobile" && !forceFullList && !query.trim() ? buildSmartMobileGroups(groups, 12) : groups;
 	}
 
 	function paneRows() {
@@ -741,11 +774,12 @@ function createPanel(options: {
 
 	function renderList(width: number): string[] {
 		clampSelection();
-		const groupsForWidth = displayGroups(width);
+		const mode = panelMode();
+		const groupsForWidth = displayGroups(mode);
 		const rows = visibleRows(groupsForWidth, query);
 		let paneOrdinal = -1;
 		const lines: string[] = [];
-		const smart = width < 90 && !forceFullList && !query.trim();
+		const smart = mode === "mobile" && !forceFullList && !query.trim();
 		lines.push(theme.fg("accent", theme.bold("tmux panes")) + theme.fg("dim", "  / search • enter preview • r refresh • PgUp/PgDn • esc/q close"));
 		lines.push(
 			theme.fg(
@@ -784,7 +818,7 @@ function createPanel(options: {
 			const selected = paneOrdinal === selectedPaneIndex;
 			const number = paneOrdinal + 1;
 			const prefix = selected ? theme.fg("accent", "> ") : "  ";
-			const label = width < 90 ? formatPaneCleanMobileLabel(number, row.pane) : `${String(number).padStart(2)}  ${formatPaneLabel(row.pane)}`;
+			const label = mode === "mobile" ? formatPaneCleanMobileLabel(number, row.pane) : `${String(number).padStart(2)}  ${formatPaneLabel(row.pane)}`;
 			lines.push(prefix + colorPaneLabel(row.pane, label, selected));
 		}
 		const remaining = rows.length - (scrollOffset + maxBodyLines);

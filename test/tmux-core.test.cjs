@@ -36,6 +36,7 @@ const {
   shouldIgnoreInitialPreviewEnter,
   resolveNumericJumpInput,
   finalizeNumericJumpInput,
+  resolvePanelViewMode,
 } = require('../tmux-core.cjs');
 
 const sampleRows = [
@@ -193,6 +194,15 @@ test('parseTmuxCommandArgs supports mobile subcommands', () => {
     selector: 'infra:2.1',
     message: 'hello there',
   });
+});
+
+test('resolvePanelViewMode follows explicit view setting before width heuristics', () => {
+  assert.equal(resolvePanelViewMode('desktop', 80, 100), 'desktop');
+  assert.equal(resolvePanelViewMode('mobile', 140, 100), 'mobile');
+  assert.equal(resolvePanelViewMode('auto', 80, 100), 'mobile');
+  assert.equal(resolvePanelViewMode('auto', 140, 100), 'desktop');
+  assert.equal(resolvePanelViewMode(undefined, 82, 100), 'mobile');
+  assert.equal(resolvePanelViewMode(undefined, 140, 100), 'desktop');
 });
 
 test('getOverlayOptions uses full-width centered overlay on narrow terminals', () => {

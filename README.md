@@ -80,6 +80,7 @@ Examples:
 
 - Opens a right-side overlay on wide terminals.
 - Opens a full-width centered overlay on narrow/mobile terminals.
+- `/tmux` honors Pi's runtime view setting: `/view desktop` uses desktop rows, while `/view mobile` uses mobile rows.
 - On narrow/mobile terminals, `/tmux` defaults to a smart cockpit shortlist so the global pane list does not overwhelm chat flow.
 - Smart mobile order favors current pane, panes needing input, manager, recently used/flip targets, active agents, linked/same-work panes, then lower-priority error/done/idle panes.
 - `/tmux all` forces the full global pane list when needed.
