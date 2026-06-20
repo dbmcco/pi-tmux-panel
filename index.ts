@@ -25,6 +25,8 @@ type Pane = {
 	workgraphTaskId?: string;
 	task?: string;
 	statusGlyph?: string;
+	isPreviousPane?: boolean;
+	isRecentPane?: boolean;
 };
 
 type PaneMetadata = {
@@ -98,6 +100,8 @@ const {
 	formatCaptureError: coreFormatCaptureError,
 	normalizeRenderLines: coreNormalizeRenderLines,
 	shouldIgnoreInitialPreviewEnter: coreShouldIgnoreInitialPreviewEnter,
+	resolveNumericJumpInput: coreResolveNumericJumpInput,
+	finalizeNumericJumpInput: coreFinalizeNumericJumpInput,
 	computePaneActivity: coreComputePaneActivity,
 } = core as {
 	parsePaneRows: (output: string, currentPaneId?: string) => Pane[];
@@ -138,6 +142,19 @@ const {
 	formatCaptureError?: (pane: Pane, errorMessage: unknown) => string;
 	normalizeRenderLines?: (lines: string[], targetLineCount: number) => string[];
 	shouldIgnoreInitialPreviewEnter?: (openedAt: number, now?: number, guardMs?: number) => boolean;
+	resolveNumericJumpInput?: (
+		state: { buffer?: string; updatedAt?: number },
+		digit: string,
+		totalCount: number,
+		now?: number,
+		timeoutMs?: number,
+	) => { buffer: string; updatedAt: number; selectedIndex?: number; shouldJump?: boolean };
+	finalizeNumericJumpInput?: (
+		state: { buffer?: string; updatedAt?: number },
+		totalCount: number,
+		now?: number,
+		timeoutMs?: number,
+	) => { selectedIndex: number; shouldJump: true } | undefined;
 	computePaneActivity?: (
 		pane: Pane,
 		capturedText: string,
@@ -216,6 +233,8 @@ function fallbackEnrichPaneMetadata(pane: Pane, state: PanelState, currentPaneId
 		role: meta.role,
 		workgraphTaskId: meta.workgraphTaskId,
 		task: meta.task,
+		isPreviousPane: state.navigation?.previousPaneId === pane.paneId,
+		isRecentPane: state.navigation?.currentPaneId === pane.paneId || state.navigation?.previousPaneId === pane.paneId,
 	};
 }
 
@@ -278,10 +297,12 @@ function fallbackBuildSmartMobileGroups(groups: PaneGroup[], limit = 12): PaneGr
 	const priority = (pane: Pane): number => {
 		if (pane.isCurrent) return 5;
 		if (pane.status === "needs-input" || pane.statusGlyph === "◆") return 10;
-		if (pane.status === "error" || pane.statusGlyph === "!") return 20;
-		if (pane.status === "active" || pane.status === "recent" || pane.statusGlyph === "●" || pane.statusGlyph === "◐") return 30;
-		if (pane.role === "manager" || pane.sessionName === "pi-manager" || /tmux manager/i.test(pane.title || "")) return 40;
-		if (pane.status === "cooling" || pane.statusGlyph === "◌") return 60;
+		if (pane.role === "manager" || pane.sessionName === "pi-manager" || /tmux manager/i.test(pane.title || "")) return 20;
+		if (pane.isPreviousPane || pane.isRecentPane) return 30;
+		if (pane.status === "active" || pane.status === "recent" || pane.statusGlyph === "●" || pane.statusGlyph === "◐") return 40;
+		if (pane.relation === "child" || pane.relation === "linked") return 50;
+		if (pane.status === "error" || pane.statusGlyph === "!") return 60;
+		if (pane.status === "cooling" || pane.statusGlyph === "◌") return 70;
 		return 90;
 	};
 	const panes = flattenGroups(groups)
@@ -319,6 +340,51 @@ function fallbackFormatPaneCleanMobileLabel(number: number, pane: Pane): string 
 }
 
 const formatPaneCleanMobileLabel = coreFormatPaneCleanMobileLabel ?? fallbackFormatPaneCleanMobileLabel;
+
+const NUMERIC_JUMP_TIMEOUT_MS = 650;
+
+function fallbackHasLongerNumericMatch(prefix: string, totalCount: number): boolean {
+	for (let value = 1; value <= Math.max(0, Number(totalCount || 0)); value++) {
+		const text = String(value);
+		if (text.length > prefix.length && text.startsWith(prefix)) return true;
+	}
+	return false;
+}
+
+function fallbackResolveNumericJumpInput(
+	state: { buffer?: string; updatedAt?: number },
+	digit: string,
+	totalCount: number,
+	now = Date.now(),
+	timeoutMs = NUMERIC_JUMP_TIMEOUT_MS,
+): { buffer: string; updatedAt: number; selectedIndex?: number; shouldJump?: boolean } {
+	if (!/^[0-9]$/.test(String(digit || ""))) return { buffer: "", updatedAt: now };
+	const previousBuffer = now - Number(state?.updatedAt || 0) < timeoutMs ? String(state?.buffer || "") : "";
+	const buffer = `${previousBuffer}${digit}`.replace(/^0+/, "") || digit;
+	const value = Number(buffer);
+	const total = Math.max(0, Number(totalCount || 0));
+	const selectedIndex = Number.isInteger(value) && value >= 1 && value <= total ? value - 1 : undefined;
+	if (selectedIndex === undefined) return { buffer: "", updatedAt: now };
+	const pending = fallbackHasLongerNumericMatch(buffer, total);
+	return { buffer: pending ? buffer : "", updatedAt: now, selectedIndex, shouldJump: !pending };
+}
+
+function fallbackFinalizeNumericJumpInput(
+	state: { buffer?: string; updatedAt?: number },
+	totalCount: number,
+	now = Date.now(),
+	timeoutMs = NUMERIC_JUMP_TIMEOUT_MS,
+): { selectedIndex: number; shouldJump: true } | undefined {
+	const buffer = String(state?.buffer || "");
+	if (!buffer || now - Number(state?.updatedAt || 0) < timeoutMs) return undefined;
+	const value = Number(buffer);
+	const total = Math.max(0, Number(totalCount || 0));
+	if (!Number.isInteger(value) || value < 1 || value > total) return undefined;
+	return { selectedIndex: value - 1, shouldJump: true };
+}
+
+const resolveNumericJumpInput = coreResolveNumericJumpInput ?? fallbackResolveNumericJumpInput;
+const finalizeNumericJumpInput = coreFinalizeNumericJumpInput ?? fallbackFinalizeNumericJumpInput;
 
 function fallbackManagerPrompt(): string {
 	return [
@@ -593,6 +659,8 @@ function createPanel(options: {
 	let actionIndex = initialActionIndex;
 	let scrollOffset = 0;
 	let previewScrollOffset = 0;
+	let numericJump = { buffer: "", updatedAt: 0 };
+	let numericJumpTimer: ReturnType<typeof setTimeout> | undefined;
 	const actions: Array<{ label: string; result: (pane: Pane) => PanelResult }> = [
 		{ label: "Jump", result: (pane) => ({ type: "jump", paneId: pane.paneId }) },
 		{ label: "Send", result: (pane) => ({ type: "send", paneId: pane.paneId }) },
@@ -610,6 +678,29 @@ function createPanel(options: {
 
 	function selectedPane(): Pane | undefined {
 		return paneRows()[selectedPaneIndex]?.pane;
+	}
+
+	function clearNumericJump() {
+		if (numericJumpTimer) clearTimeout(numericJumpTimer);
+		numericJumpTimer = undefined;
+		numericJump = { buffer: "", updatedAt: 0 };
+	}
+
+	function jumpSelectedIndex(index: number) {
+		const pane = paneRows()[index]?.pane;
+		if (pane) {
+			clearNumericJump();
+			onDone({ type: "jump", paneId: pane.paneId });
+		}
+	}
+
+	function scheduleNumericJumpFinalize() {
+		if (numericJumpTimer) clearTimeout(numericJumpTimer);
+		numericJumpTimer = setTimeout(() => {
+			const finalized = finalizeNumericJumpInput(numericJump, paneRows().length);
+			if (!finalized?.shouldJump) return;
+			jumpSelectedIndex(finalized.selectedIndex);
+		}, NUMERIC_JUMP_TIMEOUT_MS);
 	}
 
 	function clampSelection() {
@@ -656,7 +747,20 @@ function createPanel(options: {
 		const lines: string[] = [];
 		const smart = width < 90 && !forceFullList && !query.trim();
 		lines.push(theme.fg("accent", theme.bold("tmux panes")) + theme.fg("dim", "  / search • enter preview • r refresh • PgUp/PgDn • esc/q close"));
-		lines.push(theme.fg("dim", searching ? `search: ${query}_` : query ? `filter: ${query}` : smart ? "smart shortlist • /tmux all for full list" : "filter: all panes • numbers move selection"));
+		lines.push(
+			theme.fg(
+				"dim",
+				searching
+					? `search: ${query}_`
+					: numericJump.buffer
+						? `jump: ${numericJump.buffer}…`
+						: query
+							? `filter: ${query}`
+							: smart
+								? "smart shortlist • /tmux all for full list"
+								: "filter: all panes • numbers jump directly",
+			),
+		);
 		lines.push("");
 
 		if (rows.length === 0) {
@@ -780,36 +884,55 @@ function createPanel(options: {
 				return;
 			}
 
-			if (matchesKey(data, Key.escape) || data === "q") onDone({ type: "close" });
-			else if (data === "r") onDone({ type: "refresh" });
-			else if (data === "/") {
+			if (matchesKey(data, Key.escape) || data === "q") {
+				clearNumericJump();
+				onDone({ type: "close" });
+			} else if (data === "r") {
+				clearNumericJump();
+				onDone({ type: "refresh" });
+			} else if (data === "/") {
+				clearNumericJump();
 				searching = true;
 				tui.requestRender();
 			} else if (matchesKey(data, Key.up)) {
+				clearNumericJump();
 				selectedPaneIndex--;
 				clampSelection();
 				tui.requestRender();
 			} else if (matchesKey(data, Key.down)) {
+				clearNumericJump();
 				selectedPaneIndex++;
 				clampSelection();
 				tui.requestRender();
 			} else if (matchesKey(data, Key.pageUp)) {
+				clearNumericJump();
 				selectedPaneIndex -= Math.max(5, (process.stdout.rows || 24) - 8);
 				clampSelection();
 				tui.requestRender();
 			} else if (matchesKey(data, Key.pageDown)) {
+				clearNumericJump();
 				selectedPaneIndex += Math.max(5, (process.stdout.rows || 24) - 8);
 				clampSelection();
 				tui.requestRender();
 			} else if (matchesKey(data, Key.enter)) {
+				const finalized = finalizeNumericJumpInput(numericJump, paneRows().length, Date.now(), 0);
+				if (finalized?.shouldJump) {
+					jumpSelectedIndex(finalized.selectedIndex);
+					return;
+				}
+				clearNumericJump();
 				const pane = selectedPane();
 				if (pane) onDone({ type: "preview", paneId: pane.paneId });
-			} else if (/^[1-9]$/.test(data)) {
-				const index = Number(data) - 1;
-				if (index < paneRows().length) {
-					selectedPaneIndex = index;
-					tui.requestRender();
+			} else if (/^[0-9]$/.test(data)) {
+				const result = resolveNumericJumpInput(numericJump, data, paneRows().length);
+				numericJump = { buffer: result.buffer, updatedAt: result.updatedAt };
+				if (result.selectedIndex !== undefined) selectedPaneIndex = result.selectedIndex;
+				if (result.shouldJump && result.selectedIndex !== undefined) {
+					jumpSelectedIndex(result.selectedIndex);
+					return;
 				}
+				if (numericJump.buffer) scheduleNumericJumpFinalize();
+				tui.requestRender();
 			}
 		},
 	};

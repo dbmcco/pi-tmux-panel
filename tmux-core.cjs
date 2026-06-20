@@ -73,10 +73,12 @@ function groupPanes(panes, currentCwd) {
 function mobilePanePriority(pane) {
   if (pane.isCurrent) return 5;
   if (pane.status === 'needs-input' || pane.statusGlyph === '◆') return 10;
-  if (pane.status === 'error' || pane.statusGlyph === '!') return 20;
-  if (pane.status === 'active' || pane.status === 'recent' || pane.statusGlyph === '●' || pane.statusGlyph === '◐') return 30;
-  if (pane.role === 'manager' || pane.sessionName === 'pi-manager' || /tmux manager/i.test(pane.title || '')) return 40;
-  if (pane.status === 'cooling' || pane.statusGlyph === '◌') return 60;
+  if (pane.role === 'manager' || pane.sessionName === 'pi-manager' || /tmux manager/i.test(pane.title || '')) return 20;
+  if (pane.isPreviousPane || pane.isRecentPane) return 30;
+  if (pane.status === 'active' || pane.status === 'recent' || pane.statusGlyph === '●' || pane.statusGlyph === '◐') return 40;
+  if (pane.relation === 'child' || pane.relation === 'linked') return 50;
+  if (pane.status === 'error' || pane.statusGlyph === '!') return 60;
+  if (pane.status === 'cooling' || pane.statusGlyph === '◌') return 70;
   if (pane.status === 'done' || pane.statusGlyph === '✓') return 80;
   return 90;
 }
@@ -281,6 +283,8 @@ function enrichPaneMetadata(pane, state, currentPaneId, capturedText) {
     role: meta.role,
     workgraphTaskId: meta.workgraphTaskId,
     task: meta.task,
+    isPreviousPane: state?.navigation?.previousPaneId === pane.paneId,
+    isRecentPane: state?.navigation?.currentPaneId === pane.paneId || state?.navigation?.previousPaneId === pane.paneId,
   };
 }
 
@@ -454,6 +458,41 @@ function normalizeRenderLines(lines, targetLineCount) {
   return normalized;
 }
 
+const NUMERIC_JUMP_TIMEOUT_MS = 650;
+
+function hasLongerNumericMatch(prefix, totalCount) {
+  const normalized = String(prefix || '');
+  const total = Math.max(0, Number(totalCount || 0));
+  if (!normalized) return false;
+  for (let value = 1; value <= total; value++) {
+    const text = String(value);
+    if (text.length > normalized.length && text.startsWith(normalized)) return true;
+  }
+  return false;
+}
+
+function resolveNumericJumpInput(state, digit, totalCount, now = Date.now(), timeoutMs = NUMERIC_JUMP_TIMEOUT_MS) {
+  const normalizedDigit = String(digit || '');
+  if (!/^[0-9]$/.test(normalizedDigit)) return { buffer: '', updatedAt: now };
+  const previousBuffer = state && now - Number(state.updatedAt || 0) < timeoutMs ? String(state.buffer || '') : '';
+  const buffer = `${previousBuffer}${normalizedDigit}`.replace(/^0+/, '') || normalizedDigit;
+  const total = Math.max(0, Number(totalCount || 0));
+  const value = Number(buffer);
+  const selectedIndex = Number.isInteger(value) && value >= 1 && value <= total ? value - 1 : undefined;
+  if (selectedIndex === undefined) return { buffer: '', updatedAt: now };
+  const pending = hasLongerNumericMatch(buffer, total);
+  return { buffer: pending ? buffer : '', updatedAt: now, selectedIndex, shouldJump: !pending };
+}
+
+function finalizeNumericJumpInput(state, totalCount, now = Date.now(), timeoutMs = NUMERIC_JUMP_TIMEOUT_MS) {
+  const buffer = String((state && state.buffer) || '');
+  if (!buffer || now - Number(state.updatedAt || 0) < timeoutMs) return undefined;
+  const value = Number(buffer);
+  const total = Math.max(0, Number(totalCount || 0));
+  if (!Number.isInteger(value) || value < 1 || value > total) return undefined;
+  return { selectedIndex: value - 1, shouldJump: true };
+}
+
 function shouldIgnoreInitialPreviewEnter(openedAt, now = Date.now(), guardMs = 650) {
   if (!openedAt) return false;
   return Math.max(0, now - openedAt) < guardMs;
@@ -497,4 +536,6 @@ module.exports = {
   formatCaptureError,
   normalizeRenderLines,
   shouldIgnoreInitialPreviewEnter,
+  resolveNumericJumpInput,
+  finalizeNumericJumpInput,
 };

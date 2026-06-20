@@ -34,6 +34,8 @@ const {
   statusGlyph,
   normalizeRenderLines,
   shouldIgnoreInitialPreviewEnter,
+  resolveNumericJumpInput,
+  finalizeNumericJumpInput,
 } = require('../tmux-core.cjs');
 
 const sampleRows = [
@@ -74,12 +76,13 @@ test('buildSmartMobileGroups keeps a compact attention-first shortlist', () => {
   const manager = { ...panes[3], paneId: '%777', target: 'pi-manager:1.1', sessionName: 'pi-manager', title: 'tmux manager', role: 'manager', status: 'recent' };
   const needsInput = { ...panes[2], paneId: '%888', target: 'paia:8.1', status: 'needs-input' };
   const active = { ...panes[2], paneId: '%889', target: 'paia:9.1', status: 'active' };
+  const previous = { ...panes[2], paneId: '%891', target: 'prev:1.1', status: 'idle', isPreviousPane: true };
   const idle = { ...panes[1], paneId: '%890', target: 'idle:1.1', status: 'idle' };
-  const groups = groupPanes([panes[0], panes[1], manager, needsInput, active, idle], '/Users/braydon/projects/experiments');
-  const smart = buildSmartMobileGroups(groups, 4);
+  const groups = groupPanes([panes[0], panes[1], manager, needsInput, active, previous, idle], '/Users/braydon/projects/experiments');
+  const smart = buildSmartMobileGroups(groups, 5);
 
   assert.equal(smart[0].title, 'Smart mobile shortlist');
-  assert.deepEqual(smart[0].panes.map((pane) => pane.target), ['infra:1.1', 'paia:8.1', 'paia:9.1', 'pi-manager:1.1']);
+  assert.deepEqual(smart[0].panes.map((pane) => pane.target), ['infra:1.1', 'paia:8.1', 'pi-manager:1.1', 'prev:1.1', 'paia:9.1']);
 });
 
 test('buildCaptureArgs captures recent output by stable pane id', () => {
@@ -156,6 +159,23 @@ test('formatPaneCleanMobileLabel shows target and description for mobile switchi
 
   const missingTarget = { ...panes[2], target: undefined, sessionName: 'paia', windowIndex: '7', paneIndex: '1', statusGlyph: '●' };
   assert.equal(formatPaneCleanMobileLabel(4, missingTarget), '4. ● paia:7.1 — paia-program | 5h 84% left');
+});
+
+test('numeric jump input buffers multi-digit pane numbers before jumping', () => {
+  const first = resolveNumericJumpInput({ buffer: '', updatedAt: 0 }, '2', 30, 1000);
+
+  assert.deepEqual(first, { buffer: '2', updatedAt: 1000, selectedIndex: 1, shouldJump: false });
+
+  const second = resolveNumericJumpInput(first, '3', 30, 1200);
+
+  assert.deepEqual(second, { buffer: '', updatedAt: 1200, selectedIndex: 22, shouldJump: true });
+});
+
+test('numeric jump input finalizes pending single-digit jumps after a short timeout', () => {
+  const pending = resolveNumericJumpInput({ buffer: '', updatedAt: 0 }, '2', 30, 1000);
+
+  assert.equal(finalizeNumericJumpInput(pending, 30, 1400), undefined);
+  assert.deepEqual(finalizeNumericJumpInput(pending, 30, 1800), { selectedIndex: 1, shouldJump: true });
 });
 
 test('parseTmuxCommandArgs supports mobile subcommands', () => {

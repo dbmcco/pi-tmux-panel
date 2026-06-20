@@ -80,9 +80,11 @@ Examples:
 
 - Opens a right-side overlay on wide terminals.
 - Opens a full-width centered overlay on narrow/mobile terminals.
-- On narrow/mobile terminals, `/tmux` defaults to a smart attention-first shortlist so the global pane list does not overwhelm chat flow.
+- On narrow/mobile terminals, `/tmux` defaults to a smart cockpit shortlist so the global pane list does not overwhelm chat flow.
+- Smart mobile order favors current pane, panes needing input, manager, recently used/flip targets, active agents, linked/same-work panes, then lower-priority error/done/idle panes.
 - `/tmux all` forces the full global pane list when needed.
 - Uses mobile labels on narrow terminals and `/tmux list` that show pane target plus useful description/title, e.g. `1. ● infra:1.1 — pi · experiments`.
+- Number keys jump directly. Multi-digit numbers are buffered briefly, so typing `23` jumps to pane 23 instead of selecting 2 then 3.
 - `/tmux <selector>` quick-jumps for fast mobile pane switching.
 - `/flip` and `/tmux flip` toggle back to the previous pane recorded by `/tmux`, `/mgr` Jump, or overlay Jump, with tmux native last-pane fallback when no extension history exists.
 - Lists tmux panes grouped by current pane, related cwd, other agents, and shells.
