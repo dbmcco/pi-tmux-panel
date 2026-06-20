@@ -306,8 +306,14 @@ function localShellQuote(value: string): string {
 	return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function fallbackPaneTarget(pane: Pane): string {
+	if (pane.target) return pane.target;
+	if (pane.sessionName && pane.windowIndex !== undefined && pane.paneIndex !== undefined) return `${pane.sessionName}:${pane.windowIndex}.${pane.paneIndex}`;
+	return pane.paneId || "";
+}
+
 function fallbackFormatPaneCleanMobileLabel(number: number, pane: Pane): string {
-	const prefix = [`${number}.`, pane.statusGlyph, pane.target].filter(Boolean).join(" ");
+	const prefix = [`${number}.`, pane.statusGlyph, fallbackPaneTarget(pane)].filter(Boolean).join(" ");
 	const description = pane.title || pane.task || pane.command || pane.cwd || pane.repo || "";
 	return description ? `${prefix} — ${description}` : prefix;
 }

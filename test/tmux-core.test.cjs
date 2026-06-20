@@ -153,6 +153,9 @@ test('formatPaneCleanMobileLabel shows target and description for mobile switchi
   assert.equal(formatPaneCleanMobileLabel(1, current), '1. ● infra:1.1 — pi · experiments');
   assert.equal(formatPaneCleanMobileLabel(2, child), '2. ◆ paia:7.1 — paia-program | 5h 84% left');
   assert.equal(formatPaneCleanMobileLabel(3, manager), '3. ◐ pi-manager:0.0 — tmux manager');
+
+  const missingTarget = { ...panes[2], target: undefined, sessionName: 'paia', windowIndex: '7', paneIndex: '1', statusGlyph: '●' };
+  assert.equal(formatPaneCleanMobileLabel(4, missingTarget), '4. ● paia:7.1 — paia-program | 5h 84% left');
 });
 
 test('parseTmuxCommandArgs supports mobile subcommands', () => {

@@ -132,10 +132,18 @@ function paneMetaParts(pane) {
   return parts.filter(Boolean).join(' ');
 }
 
+function paneTarget(pane) {
+  if (pane.target) return pane.target;
+  if (pane.sessionName && pane.windowIndex !== undefined && pane.paneIndex !== undefined) {
+    return `${pane.sessionName}:${pane.windowIndex}.${pane.paneIndex}`;
+  }
+  return pane.paneId || '';
+}
+
 function formatPaneCompactLabel(number, pane) {
   const title = pane.title || pane.command || '';
   const suffix = pane.isCurrent ? ' ← here' : '';
-  return `${number}. ${pane.target} ${paneMetaParts(pane)} — ${title}${suffix}`;
+  return `${number}. ${paneTarget(pane)} ${paneMetaParts(pane)} — ${title}${suffix}`;
 }
 
 function paneDescription(pane) {
@@ -143,7 +151,7 @@ function paneDescription(pane) {
 }
 
 function formatPaneCleanMobileLabel(number, pane) {
-  const parts = [`${number}.`, pane.statusGlyph, pane.target].filter(Boolean).join(' ');
+  const parts = [`${number}.`, pane.statusGlyph, paneTarget(pane)].filter(Boolean).join(' ');
   const description = paneDescription(pane);
   return description ? `${parts} — ${description}` : parts;
 }
@@ -163,7 +171,7 @@ function resolvePaneSelector(flatItems, selector) {
   if (!normalized) return undefined;
   const number = Number(normalized);
   if (Number.isInteger(number) && number > 0) return flatItems.find((item) => item.number === number);
-  return flatItems.find((item) => item.pane.paneId === normalized || item.pane.target === normalized);
+  return flatItems.find((item) => item.pane.paneId === normalized || paneTarget(item.pane) === normalized);
 }
 
 function parseTmuxCommandArgs(args) {

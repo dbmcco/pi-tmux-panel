@@ -1,6 +1,6 @@
 {
   "name": "pi-tmux-panel",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A pi extension that adds a preview-first tmux pane switcher, smart mobile flow, flip navigation, pane links, visible spawning, and a global tmux manager agent.",
   "type": "commonjs",
   "private": false,
