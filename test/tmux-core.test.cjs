@@ -37,6 +37,7 @@ const {
   resolveNumericJumpInput,
   finalizeNumericJumpInput,
   resolvePanelViewMode,
+  resolveCurrentPaneContext,
 } = require('../tmux-core.cjs');
 
 const sampleRows = [
@@ -193,6 +194,17 @@ test('parseTmuxCommandArgs supports mobile subcommands', () => {
     action: 'send',
     selector: 'infra:2.1',
     message: 'hello there',
+  });
+});
+
+test('resolveCurrentPaneContext prefers live tmux client pane and cwd over stale process values', () => {
+  assert.deepEqual(
+    resolveCurrentPaneContext({ envPaneId: '%old', displayPaneId: '%syn', ctxCwd: '/old', displayCwd: '/Users/braydon/projects/work/synth' }),
+    { paneId: '%syn', cwd: '/Users/braydon/projects/work/synth' },
+  );
+  assert.deepEqual(resolveCurrentPaneContext({ envPaneId: '%old', displayPaneId: '', ctxCwd: '/old', displayCwd: '' }), {
+    paneId: '%old',
+    cwd: '/old',
   });
 });
 

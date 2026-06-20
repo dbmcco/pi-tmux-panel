@@ -86,6 +86,7 @@ const {
 	flattenGroups,
 	resolvePaneSelector,
 	parseTmuxCommandArgs: coreParseTmuxCommandArgs,
+	resolveCurrentPaneContext: coreResolveCurrentPaneContext,
 	resolvePanelViewMode: coreResolvePanelViewMode,
 	getOverlayOptions,
 	enrichPaneMetadata: coreEnrichPaneMetadata,
@@ -119,6 +120,7 @@ const {
 		flatItems: Array<{ number: number; groupTitle: string; pane: Pane }>,
 		selector?: string,
 	) => { number: number; groupTitle: string; pane: Pane } | undefined;
+	resolveCurrentPaneContext?: (input?: { envPaneId?: string; displayPaneId?: string; ctxCwd?: string; displayCwd?: string }) => { paneId: string; cwd: string };
 	resolvePanelViewMode?: (configuredView?: string, columns?: number, threshold?: number) => "mobile" | "desktop";
 	parseTmuxCommandArgs: (args: string) =>
 		| { action: "open"; query?: string; scope?: string }
@@ -395,6 +397,14 @@ function fallbackResolvePanelViewMode(configuredView?: string, columns?: number,
 	return width > 0 && width < cutoff ? "mobile" : "desktop";
 }
 
+function fallbackResolveCurrentPaneContext(input: { envPaneId?: string; displayPaneId?: string; ctxCwd?: string; displayCwd?: string } = {}): { paneId: string; cwd: string } {
+	return {
+		paneId: String(input.displayPaneId || input.envPaneId || "").trim(),
+		cwd: String(input.displayCwd || input.ctxCwd || "").trim(),
+	};
+}
+
+const resolveCurrentPaneContext = coreResolveCurrentPaneContext ?? fallbackResolveCurrentPaneContext;
 const resolvePanelViewMode = coreResolvePanelViewMode ?? fallbackResolvePanelViewMode;
 
 function loadRuntimeViewState(): { view?: string; threshold?: number } {
@@ -521,11 +531,33 @@ async function capturePaneForActivity(pi: ExtensionAPI, pane: Pane): Promise<str
 	}
 }
 
-async function loadPanes(pi: ExtensionAPI, ctx: ExtensionCommandContext, state: PanelState): Promise<Pane[]> {
+async function loadCurrentPaneContext(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<{ paneId: string; cwd: string }> {
+	let displayPaneId = "";
+	let displayCwd = "";
+	try {
+		displayPaneId = await runTmux(pi, ["display-message", "-p", "#{pane_id}"]);
+	} catch {
+		displayPaneId = "";
+	}
+	try {
+		displayCwd = await runTmux(pi, ["display-message", "-p", "#{pane_current_path}"]);
+	} catch {
+		displayCwd = "";
+	}
+	return resolveCurrentPaneContext({ envPaneId: process.env.TMUX_PANE, displayPaneId, ctxCwd: ctx.cwd, displayCwd });
+}
+
+async function loadPanes(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	state: PanelState,
+	currentContext?: { paneId: string; cwd: string },
+): Promise<Pane[]> {
+	const current = currentContext ?? (await loadCurrentPaneContext(pi, ctx));
 	const output = await runTmux(pi, ["list-panes", "-a", "-F", LIST_PANES_FORMAT]);
-	const rawPanes = parsePaneRows(output, process.env.TMUX_PANE).map((pane) => ({
+	const rawPanes = parsePaneRows(output, current.paneId).map((pane) => ({
 		...pane,
-		isCurrent: pane.paneId === process.env.TMUX_PANE,
+		isCurrent: pane.paneId === current.paneId,
 	}));
 	const livePaneIds = new Set(rawPanes.map((pane) => pane.paneId));
 	if (
@@ -544,12 +576,14 @@ async function loadPanes(pi: ExtensionAPI, ctx: ExtensionCommandContext, state: 
 			const capturedText = await capturePaneForActivity(pi, pane);
 			const activity = computePaneActivity(pane, capturedText, state.activity[pane.paneId], now);
 			state.activity[pane.paneId] = activity.activity;
-			const enriched = enrichPaneMetadata(pane, state, process.env.TMUX_PANE, capturedText);
+			const enriched = enrichPaneMetadata(pane, state, current.paneId, capturedText);
+			const isCurrent = pane.paneId === current.paneId;
 			return {
 				...enriched,
+				isCurrent,
 				role: pane.paneId === state.manager?.paneId ? "manager" : enriched.role,
-				status: activity.status,
-				statusGlyph: activity.statusGlyph,
+				status: isCurrent ? "active" : activity.status,
+				statusGlyph: isCurrent ? "●" : activity.statusGlyph,
 			};
 		}),
 	);
@@ -578,8 +612,8 @@ async function jumpToPane(pi: ExtensionAPI, pane: Pane): Promise<void> {
 	}
 }
 
-async function recordAndJumpToPane(pi: ExtensionAPI, pane: Pane, state: PanelState): Promise<void> {
-	updateJumpHistory(state, process.env.TMUX_PANE, pane.paneId);
+async function recordAndJumpToPane(pi: ExtensionAPI, pane: Pane, state: PanelState, fromPaneId = process.env.TMUX_PANE): Promise<void> {
+	updateJumpHistory(state, fromPaneId, pane.paneId);
 	savePanelState(state);
 	await jumpToPane(pi, pane);
 }
@@ -1108,8 +1142,9 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const state = loadPanelState();
-			let panes = await loadPanes(pi, ctx, state);
-			let groups = groupPanes(panes, ctx.cwd);
+			let currentContext = await loadCurrentPaneContext(pi, ctx);
+			let panes = await loadPanes(pi, ctx, state, currentContext);
+			let groups = groupPanes(panes, currentContext.cwd);
 			let flat = flattenGroups(groups);
 			const parsed = parseTmuxCommandArgs(args);
 			let previewPane: Pane | undefined;
@@ -1141,7 +1176,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (parsed.action === "jump") {
 				const pane = resolveRequestedPane(parsed.selector);
-				if (pane) await recordAndJumpToPane(pi, pane, state);
+				if (pane) await recordAndJumpToPane(pi, pane, state, currentContext.paneId);
 				return;
 			}
 
@@ -1161,7 +1196,7 @@ export default function (pi: ExtensionAPI) {
 				if (!pane) return;
 				state.panes[pane.paneId] = {
 					...(state.panes[pane.paneId] ?? {}),
-					parentPaneId: process.env.TMUX_PANE,
+					parentPaneId: currentContext.paneId,
 					role: parsed.role?.trim() || state.panes[pane.paneId]?.role || "linked",
 					createdAt: state.panes[pane.paneId]?.createdAt ?? Date.now(),
 				};
@@ -1199,11 +1234,11 @@ export default function (pi: ExtensionAPI) {
 				const kind = parsed.kind === "shell" ? "shell" : "pi";
 				const task = parsed.task?.trim() || (kind === "pi" ? (await ctx.ui.input("Spawn visible pi agent", "task"))?.trim() : "shell");
 				if (!task) return;
-				const output = await runTmux(pi, buildSpawnWindowArgs(ctx.cwd, kind, task));
-				const spawned = parsePaneRows(output, process.env.TMUX_PANE)[0];
+				const output = await runTmux(pi, buildSpawnWindowArgs(currentContext.cwd || ctx.cwd, kind, task));
+				const spawned = parsePaneRows(output, currentContext.paneId)[0];
 				if (spawned?.paneId) {
 					state.panes[spawned.paneId] = {
-						parentPaneId: process.env.TMUX_PANE,
+						parentPaneId: currentContext.paneId,
 						role: kind,
 						task,
 						createdAt: Date.now(),
@@ -1217,12 +1252,13 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			while (true) {
-				const groups = groupPanes(panes, ctx.cwd);
+				const groups = groupPanes(panes, currentContext.cwd);
 				const result = await showPanel(ctx, groups, { previewPane, previewOutput, query, forceFullList });
 				if (!result || result.type === "close") return;
 
 				if (result.type === "refresh") {
-					panes = await loadPanes(pi, ctx, state);
+					currentContext = await loadCurrentPaneContext(pi, ctx);
+					panes = await loadPanes(pi, ctx, state, currentContext);
 					previewPane = undefined;
 					previewOutput = undefined;
 					continue;
@@ -1237,7 +1273,8 @@ export default function (pi: ExtensionAPI) {
 				const pane = panes.find((candidate) => candidate.paneId === result.paneId);
 				if (!pane) {
 					ctx.ui.notify(`Pane disappeared: ${result.paneId}`, "warning");
-					panes = await loadPanes(pi, ctx, state);
+					currentContext = await loadCurrentPaneContext(pi, ctx);
+					panes = await loadPanes(pi, ctx, state, currentContext);
 					previewPane = undefined;
 					previewOutput = undefined;
 					continue;
@@ -1250,7 +1287,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				if (result.type === "jump") {
-					await recordAndJumpToPane(pi, pane, state);
+					await recordAndJumpToPane(pi, pane, state, currentContext.paneId);
 					return;
 				}
 
